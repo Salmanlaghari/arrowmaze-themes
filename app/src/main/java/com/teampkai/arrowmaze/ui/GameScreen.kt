@@ -449,6 +449,7 @@ fun GamePlayScreen(
     theme: Theme,
     soundManager: SoundManager,
     onToggleSound: () -> Unit,
+    onEngineStateChanged: () -> Unit,
     onMoveResult: (MoveResult) -> Unit,
     onBack: () -> Unit
 ) {
@@ -462,13 +463,17 @@ fun GamePlayScreen(
     val shaking = remember { mutableStateMapOf<Pair<Int, Int>, Animatable<Float, *>>() }
     // Animation start time for each lost heart (for pop/fade on lose).
     val heartAnim = remember { mutableStateMapOf<Int, Animatable<Float, *>>() }
+    // Currently-hinted cell (if any) and a 0..1 progress for its pulse.
+    var hintCell by remember { mutableStateOf<Pair<Int, Int>?>(null) }
+    val hintPulse = remember { Animatable(0f) }
     val scope = rememberCoroutineScope()
 
-    // When the level changes, clear all per-cell animations and reset hearts.
+    // When the level changes, clear all per-cell animations and reset hearts/hint.
     LaunchedEffect(gameState.currentLevel, gameState.mazeSeed) {
         slidingOut.keys.toList().forEach { slidingOut.remove(it) }
         shaking.keys.toList().forEach { shaking.remove(it) }
         heartAnim.keys.toList().forEach { heartAnim.remove(it) }
+        hintCell = null
     }
 
     Box(
@@ -540,7 +545,14 @@ fun GamePlayScreen(
                     clearedCells = gameState.clearedCells,
                     slidingOut = slidingOut,
                     shaking = shaking,
+                    hintCell = hintCell,
+                    hintPulseProgress = if (hintCell != null) hintPulse.value else 0f,
                     onCellTapped = { row, col ->
+                        // If the player taps while a hint is showing, clear it.
+                        if (hintCell != null) {
+                            hintCell = null
+                            scope.launch { hintPulse.snapTo(0f) }
+                        }
                         val result = engine.tapArrow(row, col)
                         when (result) {
                             is MoveResult.ArrowCleared -> {
@@ -599,16 +611,46 @@ fun GamePlayScreen(
                 )
             }
 
-            // Instruction
-            Text(
-                text = "Tap arrows whose path to the edge is clear",
-                fontSize = 14.sp,
-                color = Color.White.copy(alpha = 0.6f),
+            // Instruction + hint button
+            Row(
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(top = 16.dp),
-                textAlign = TextAlign.Center
-            )
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "Tap arrows whose path to the edge is clear",
+                    fontSize = 14.sp,
+                    color = Color.White.copy(alpha = 0.6f),
+                    modifier = Modifier.weight(1f)
+                )
+                val canHint = gameState.hintsRemaining > 0 && !gameState.isLevelComplete && !gameState.isGameOver
+                TextButton(
+                    onClick = {
+                        soundManager.playButtonTap()
+                        val target = engine.useHint()
+                        if (target != null) {
+                            onEngineStateChanged()
+                            hintCell = target
+                            scope.launch {
+                                hintPulse.snapTo(0f)
+                                hintPulse.animateTo(
+                                    targetValue = 1f,
+                                    animationSpec = tween(durationMillis = 1500)
+                                )
+                                hintCell = null
+                            }
+                        }
+                    },
+                    enabled = canHint
+                ) {
+                    Text(
+                        text = "💡 Hint (${gameState.hintsRemaining})",
+                        color = if (canHint) Color.White else Color.White.copy(alpha = 0.4f)
+                    )
+                }
+            }
         }
     }
 }
@@ -649,10 +691,14 @@ fun MazeGrid(
     clearedCells: Set<Pair<Int, Int>>,
     slidingOut: SnapshotStateMap<Pair<Int, Int>, Animatable<Float, *>>,
     shaking: SnapshotStateMap<Pair<Int, Int>, Animatable<Float, *>>,
+    hintCell: Pair<Int, Int>?,
+    hintPulseProgress: Float,
     onCellTapped: (Int, Int) -> Unit
 ) {
     val gridSize = maze.gridSize
     val cellSize = (320 / gridSize).dp.coerceAtMost(64.dp)
+    val density = androidx.compose.ui.platform.LocalDensity.current
+    val cellSizePx = with(density) { cellSize.toPx() }
 
     Column(
         horizontalAlignment = Alignment.CenterHorizontally
@@ -664,6 +710,7 @@ fun MazeGrid(
                     val pos = Pair(row, col)
                     val isCleared = pos in clearedCells
                     val hasArrow = cell.hasArrow && !isCleared
+                    val isHinted = hintCell == pos
 
                     Box(
                         modifier = Modifier
@@ -679,6 +726,32 @@ fun MazeGrid(
                             .clickable(enabled = hasArrow) { onCellTapped(row, col) },
                         contentAlignment = Alignment.Center
                     ) {
+                        // Pulsing hint ring (drawn behind the arrow).
+                        if (isHinted && hasArrow) {
+                            val pulse = (kotlin.math.sin(hintPulseProgress * Math.PI * 4.0) * 0.5 + 0.5).toFloat()
+                            androidx.compose.foundation.Canvas(
+                                modifier = Modifier.fillMaxSize()
+                            ) {
+                                val cx = size.width / 2f
+                                val cy = size.height / 2f
+                                val baseRadius = size.width * 0.32f
+                                val radius = baseRadius + pulse * size.width * 0.18f
+                                val ringColor = theme.arrowPalette.accent.copy(alpha = 0.45f + 0.4f * pulse)
+                                drawCircle(
+                                    color = ringColor,
+                                    radius = radius,
+                                    center = Offset(cx, cy),
+                                    style = androidx.compose.ui.graphics.drawscope.Stroke(
+                                        width = 3f + 3f * pulse
+                                    )
+                                )
+                                drawCircle(
+                                    color = theme.arrowPalette.glow.copy(alpha = 0.5f + 0.3f * pulse),
+                                    radius = radius * 0.7f,
+                                    center = Offset(cx, cy)
+                                )
+                            }
+                        }
                         if (hasArrow) {
                             ArrowCellView(
                                 cell = cell,

@@ -27,6 +27,8 @@ data class GameState(
     val isGameOver: Boolean = false,
     val maze: MazeResult? = null,
     val mazeSeed: Long = 0L,
+    /** Number of hints the player can still use on the current level. */
+    val hintsRemaining: Int = 3,
     val themeId: Int = 1
 ) {
     /** Cells that still hold an arrow and have not been cleared. */
@@ -81,9 +83,26 @@ class GameEngine(initialState: GameState = GameState()) {
             isGameOver = false,
             maze = maze,
             mazeSeed = seed,
+            hintsRemaining = 3,
             themeId = state.themeId
         )
         return state
+    }
+
+    /**
+     * Consume one hint and return the (row, col) of a currently-clearable
+     * arrow. Returns null if no hint is available or no arrow can be cleared.
+     * Applies a small score penalty (50 points) on use, matching the
+     * previously-planned "score-penalty" pattern.
+     */
+    fun useHint(): Pair<Int, Int>? {
+        if (state.hintsRemaining <= 0) return null
+        val target = findClearableHint() ?: return null
+        state = state.copy(
+            hintsRemaining = state.hintsRemaining - 1,
+            score = (state.score - 50).coerceAtLeast(0)
+        )
+        return target
     }
 
     fun setTheme(themeId: Int) {
