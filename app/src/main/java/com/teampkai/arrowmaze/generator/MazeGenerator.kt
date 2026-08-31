@@ -120,7 +120,7 @@ object MazeGenerator {
 
     private fun buildGrid(
         gridSize: Int,
-        solutionPath: Set<Pair<Int, Int>>,
+        solutionPath: List<Pair<Int, Int>>,
         arrowDensity: Float,
         rng: Random
     ): List<List<ArrowCell>> {
