@@ -1,6 +1,7 @@
 package com.teampkai.arrowmaze.ui
 
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
@@ -19,13 +20,16 @@ import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.snapshots.SnapshotStateMap
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.DrawScope
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -37,9 +41,12 @@ import com.teampkai.arrowmaze.core.GameState
 import com.teampkai.arrowmaze.core.MoveResult
 import com.teampkai.arrowmaze.data.GameProgress
 import com.teampkai.arrowmaze.data.GameProgressStore
+import com.teampkai.arrowmaze.generator.ArrowCell
 import com.teampkai.arrowmaze.generator.Direction
+import com.teampkai.arrowmaze.generator.MazeResult
 import com.teampkai.arrowmaze.themes.Theme
 import com.teampkai.arrowmaze.themes.ThemeRegistry
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 enum class Screen {
@@ -199,18 +206,17 @@ fun GameApp() {
                 onMoveResult = { result ->
                     gameState = engine.state
                     when (result) {
-                        is MoveResult.Correct -> soundManager.playCorrectMove()
-                        is MoveResult.Wrong -> soundManager.playWrongMove()
+                        is MoveResult.ArrowCleared -> soundManager.playCorrectMove()
+                        is MoveResult.Blocked -> soundManager.playWrongMove()
+                        is MoveResult.GameOver -> { /* reset already applied in engine */ }
                         is MoveResult.LevelComplete -> {
                             soundManager.playLevelComplete()
                             persistCurrentProgress()
                         }
+                        is MoveResult.Ignored -> { /* no-op */ }
                     }
                     if (result is MoveResult.LevelComplete) {
                         currentScreen = Screen.LEVEL_COMPLETE
-                    } else if (result is MoveResult.Wrong) {
-                        // Wrong move, game over - retry
-                        gameState = engine.retryLevel()
                     }
                 },
                 onBack = {
@@ -447,15 +453,22 @@ fun GamePlayScreen(
     onBack: () -> Unit
 ) {
     val maze = gameState.maze ?: return
-    val visitedCells = remember { mutableStateListOf<Pair<Int, Int>>() }
 
-    // Reset visited cells when level changes
-    LaunchedEffect(gameState.currentLevel) {
-        visitedCells.clear()
-        // Mark start cell as visited
-        if (maze.solutionPath.isNotEmpty()) {
-            visitedCells.add(maze.solutionPath.first())
-        }
+    // Cells currently animating their slide-out. Once the animation finishes
+    // they're removed from the set; the engine has already removed them from
+    // the "remaining" set, so the cell will simply not be re-rendered.
+    val slidingOut = remember { mutableStateMapOf<Pair<Int, Int>, Animatable<Float, *>>() }
+    // Cells currently shaking (after a Blocked result).
+    val shaking = remember { mutableStateMapOf<Pair<Int, Int>, Animatable<Float, *>>() }
+    // Animation start time for each lost heart (for pop/fade on lose).
+    val heartAnim = remember { mutableStateMapOf<Int, Animatable<Float, *>>() }
+    val scope = rememberCoroutineScope()
+
+    // When the level changes, clear all per-cell animations and reset hearts.
+    LaunchedEffect(gameState.currentLevel, gameState.mazeSeed) {
+        slidingOut.keys.toList().forEach { slidingOut.remove(it) }
+        shaking.keys.toList().forEach { shaking.remove(it) }
+        heartAnim.keys.toList().forEach { heartAnim.remove(it) }
     }
 
     Box(
@@ -478,7 +491,7 @@ fun GamePlayScreen(
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(bottom = 16.dp),
+                    .padding(bottom = 8.dp),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
@@ -499,7 +512,7 @@ fun GamePlayScreen(
                         onClick = onToggleSound
                     )
                     Spacer(modifier = Modifier.width(8.dp))
-                    Text(text = "❤️", fontSize = 24.sp)
+                    HeartRow(lives = gameState.lives, animMap = heartAnim)
                 }
             }
 
@@ -510,7 +523,7 @@ fun GamePlayScreen(
                 color = Color.White.copy(alpha = 0.7f),
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(bottom = 16.dp),
+                    .padding(bottom = 12.dp),
                 textAlign = TextAlign.Center
             )
 
@@ -524,17 +537,62 @@ fun GamePlayScreen(
                 MazeGrid(
                     maze = maze,
                     theme = theme,
-                    visitedCells = visitedCells,
+                    clearedCells = gameState.clearedCells,
+                    slidingOut = slidingOut,
+                    shaking = shaking,
                     onCellTapped = { row, col ->
-                        val result = engine.makeMove(row, col)
+                        val result = engine.tapArrow(row, col)
                         when (result) {
-                            is MoveResult.Correct -> {
-                                visitedCells.add(Pair(row, col))
+                            is MoveResult.ArrowCleared -> {
+                                // Start slide-out animation; keep cell rendered
+                                // until animation completes, then it disappears.
+                                val anim = Animatable(0f)
+                                slidingOut[Pair(row, col)] = anim
+                                scope.launch {
+                                    anim.animateTo(
+                                        targetValue = 1f,
+                                        animationSpec = tween(durationMillis = 350, easing = LinearEasing)
+                                    )
+                                    slidingOut.remove(Pair(row, col))
+                                }
                             }
-                            is MoveResult.LevelComplete -> {
-                                visitedCells.add(Pair(row, col))
+                            is MoveResult.Blocked -> {
+                                // Start shake animation.
+                                val anim = Animatable(0f)
+                                shaking[Pair(row, col)] = anim
+                                scope.launch {
+                                    anim.animateTo(
+                                        targetValue = 1f,
+                                        animationSpec = tween(durationMillis = 220, easing = LinearEasing)
+                                    )
+                                    shaking.remove(Pair(row, col))
+                                }
+                                // Pop/fade the just-lost heart (lives already decremented).
+                                val lostIndex = gameState.lives // lives is now e.g. 2 -> lost the 2nd heart (index 2)
+                                val heartAnimFor = Animatable(0f)
+                                heartAnim[lostIndex] = heartAnimFor
+                                scope.launch {
+                                    heartAnimFor.animateTo(
+                                        targetValue = 1f,
+                                        animationSpec = tween(durationMillis = 300)
+                                    )
+                                    delay(400)
+                                    heartAnim.remove(lostIndex)
+                                }
                             }
-                            else -> { /* handled by callback */ }
+                            is MoveResult.GameOver -> {
+                                // "Out of lives" briefly, then board is reset by engine.
+                                for (i in 0 until 3) {
+                                    val a = Animatable(0f)
+                                    heartAnim[i] = a
+                                    scope.launch {
+                                        a.animateTo(1f, tween(300))
+                                        delay(200)
+                                        heartAnim.remove(i)
+                                    }
+                                }
+                            }
+                            else -> { /* Ignored / LevelComplete — handled by caller */ }
                         }
                         onMoveResult(result)
                     }
@@ -543,7 +601,7 @@ fun GamePlayScreen(
 
             // Instruction
             Text(
-                text = "Follow the path from START to END",
+                text = "Tap arrows whose path to the edge is clear",
                 fontSize = 14.sp,
                 color = Color.White.copy(alpha = 0.6f),
                 modifier = Modifier
@@ -555,11 +613,42 @@ fun GamePlayScreen(
     }
 }
 
+/**
+ * Renders 3 hearts. Hearts that have a `lost` animation are drawn smaller
+ * and fading to grey.
+ */
+@Composable
+private fun HeartRow(
+    lives: Int,
+    animMap: SnapshotStateMap<Int, Animatable<Float, *>>
+) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        for (i in 0 until 3) {
+            val lost = i >= lives
+            val progress = animMap[i]?.value ?: 0f
+            val scale = if (lost) 1f - 0.4f * progress else 1f + 0.15f * progress
+            val alpha = if (lost) 1f - 0.7f * progress else 1f
+            Text(
+                text = "❤️",
+                fontSize = 24.sp,
+                modifier = Modifier
+                    .graphicsLayer {
+                        scaleX = scale
+                        scaleY = scale
+                    }
+                    .alpha(alpha)
+            )
+        }
+    }
+}
+
 @Composable
 fun MazeGrid(
-    maze: com.teampkai.arrowmaze.generator.MazeResult,
+    maze: MazeResult,
     theme: Theme,
-    visitedCells: List<Pair<Int, Int>>,
+    clearedCells: Set<Pair<Int, Int>>,
+    slidingOut: SnapshotStateMap<Pair<Int, Int>, Animatable<Float, *>>,
+    shaking: SnapshotStateMap<Pair<Int, Int>, Animatable<Float, *>>,
     onCellTapped: (Int, Int) -> Unit
 ) {
     val gridSize = maze.gridSize
@@ -568,67 +657,87 @@ fun MazeGrid(
     Column(
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
-        // Start indicator
-        Text(
-            text = "START ↓",
-            fontSize = 12.sp,
-            color = theme.arrowPalette.accent,
-            modifier = Modifier.padding(bottom = 4.dp)
-        )
-
         for (row in 0 until gridSize) {
-            Row(
-                horizontalArrangement = Arrangement.Center
-            ) {
+            Row(horizontalArrangement = Arrangement.Center) {
                 for (col in 0 until gridSize) {
                     val cell = maze.grid[row][col]
-                    val isVisited = visitedCells.contains(Pair(row, col))
-                    val isStart = Pair(row, col) == maze.start
-                    val isEnd = Pair(row, col) == maze.end
+                    val pos = Pair(row, col)
+                    val isCleared = pos in clearedCells
+                    val hasArrow = cell.hasArrow && !isCleared
 
                     Box(
                         modifier = Modifier
                             .size(cellSize)
                             .padding(2.dp)
                             .clip(RoundedCornerShape(4.dp))
-                            .background(
-                                when {
-                                    isStart -> Color(0x40FFD54F)
-                                    isEnd -> Color(0x40FF5722)
-                                    isVisited -> Color(0x30FFFFFF)
-                                    else -> Color(0x15FFFFFF)
-                                }
-                            )
+                            .background(Color.White.copy(alpha = 0.10f))
                             .border(
-                                width = if (isStart || isEnd) 2.dp else 0.5.dp,
-                                color = when {
-                                    isStart -> theme.arrowPalette.accent
-                                    isEnd -> Color(0xFFFF5722)
-                                    else -> Color(0x20FFFFFF)
-                                },
+                                width = 0.5.dp,
+                                color = Color.White.copy(alpha = 0.20f),
                                 shape = RoundedCornerShape(4.dp)
                             )
-                            .clickable { onCellTapped(row, col) },
+                            .clickable(enabled = hasArrow) { onCellTapped(row, col) },
                         contentAlignment = Alignment.Center
                     ) {
-                        ArrowRenderer(
-                            direction = cell.direction,
-                            theme = theme,
-                            isOnPath = cell.isOnPath,
-                            isVisited = isVisited,
-                            modifier = Modifier.size(cellSize - 4.dp)
-                        )
+                        if (hasArrow) {
+                            ArrowCellView(
+                                cell = cell,
+                                theme = theme,
+                                cellSize = cellSize,
+                                slideProgress = slidingOut[pos]?.value,
+                                shakeProgress = shaking[pos]?.value,
+                                slideDirection = cell.direction
+                            )
+                        }
                     }
                 }
             }
         }
+    }
+}
 
-        // End indicator
-        Text(
-            text = "END ↑",
-            fontSize = 12.sp,
-            color = Color(0xFFFF5722),
-            modifier = Modifier.padding(top = 4.dp)
+@Composable
+private fun ArrowCellView(
+    cell: ArrowCell,
+    theme: Theme,
+    cellSize: androidx.compose.ui.unit.Dp,
+    slideProgress: Float?,
+    shakeProgress: Float?,
+    slideDirection: Direction
+) {
+    val slide = slideProgress ?: 0f
+    val shake = shakeProgress ?: 0f
+
+    val slideOffsetDp = cellSize * slide
+    val shakeOffsetPx = (kotlin.math.sin(shake * Math.PI * 6.0) * 6.0).toFloat()
+
+    val translationX = when (slideDirection) {
+        Direction.LEFT -> -slideOffsetDp
+        Direction.RIGHT -> slideOffsetDp
+        Direction.UP, Direction.DOWN -> shakeOffsetPx.dp
+    } - shakeOffsetPx.dp
+
+    val translationY = when (slideDirection) {
+        Direction.UP -> -slideOffsetDp
+        Direction.DOWN -> slideOffsetDp
+        Direction.LEFT, Direction.RIGHT -> 0.dp
+    }
+
+    val alpha = (1f - slide).coerceIn(0f, 1f)
+
+    Box(
+        modifier = Modifier
+            .size(cellSize - 4.dp)
+            .graphicsLayer {
+                translationX = translationX.toPx()
+                translationY = translationY.toPx()
+            }
+            .alpha(alpha)
+    ) {
+        ArrowRenderer(
+            direction = cell.direction,
+            theme = theme,
+            modifier = Modifier.fillMaxSize()
         )
     }
 }
