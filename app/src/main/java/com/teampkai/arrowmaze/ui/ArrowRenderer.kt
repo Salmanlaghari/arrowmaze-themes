@@ -17,6 +17,17 @@ import com.teampkai.arrowmaze.generator.Direction
 import com.teampkai.arrowmaze.themes.Theme
 import com.teampkai.arrowmaze.themes.ThemeRegistry
 
+/**
+ * Minimalist standalone arrow icon for the "Arrows Escape" / clear-the-board
+ * mechanic. Style goals (matching the reference look):
+ *   - Dark outline, light/white fill — the body color stays neutral so the
+ *     theme reads through the *background* colors, not the arrow itself.
+ *   - Rounded curved tail so the arrow has the soft "winding" feel of the
+ *     reference image, not a sharp geometric arrowhead.
+ *   - Theme contributes via a small accent dot near the tip (very subtle tint).
+ *   - `alpha` lets the same renderer fade out an arrow during the slide-out
+ *     animation.
+ */
 @Composable
 fun ArrowRenderer(
     direction: Direction,
@@ -24,7 +35,8 @@ fun ArrowRenderer(
     isOnPath: Boolean = false,
     isVisited: Boolean = false,
     modifier: Modifier = Modifier.size(48.dp),
-    onTap: (() -> Unit)? = null
+    onTap: (() -> Unit)? = null,
+    alpha: Float = 1f
 ) {
     val clickMod = if (onTap != null) {
         Modifier.clickable { onTap() }
@@ -39,27 +51,17 @@ fun ArrowRenderer(
         val canvasHeight = size.height
         val centerX = canvasWidth / 2f
         val centerY = canvasHeight / 2f
-        val arrowLength = canvasWidth * 0.35f
+        val arrowLength = canvasWidth * 0.36f
 
-        // Draw glow effect for path cells
+        // Soft glow for "on the solution path" or currently-hinted cells.
         if (isOnPath && !isVisited) {
             drawCircle(
                 color = theme.arrowPalette.glow,
-                radius = canvasWidth * 0.4f,
+                radius = canvasWidth * 0.42f,
                 center = Offset(centerX, centerY)
             )
         }
 
-        // Draw visited indicator
-        if (isVisited) {
-            drawCircle(
-                color = Color(0x40FFFFFF),
-                radius = canvasWidth * 0.4f,
-                center = Offset(centerX, centerY)
-            )
-        }
-
-        // Rotate canvas based on direction
         val rotationAngle = when (direction) {
             Direction.UP -> -90f
             Direction.DOWN -> 90f
@@ -68,219 +70,78 @@ fun ArrowRenderer(
         }
 
         rotate(degrees = rotationAngle, pivot = Offset(centerX, centerY)) {
-            val primaryColor = if (isVisited) theme.arrowPalette.accent else theme.arrowPalette.primary
-            val secondaryColor = theme.arrowPalette.secondary
-            val accentColor = theme.arrowPalette.accent
-
-            if (theme.id == ThemeRegistry.OCEAN.id) {
-                drawOceanArrow(
-                    centerX = centerX,
-                    centerY = centerY,
-                    length = arrowLength,
-                    primaryColor = primaryColor,
-                    secondaryColor = secondaryColor,
-                    accentColor = accentColor
-                )
-            } else {
-                drawLeafArrow(
-                    centerX = centerX,
-                    centerY = centerY,
-                    length = arrowLength,
-                    primaryColor = primaryColor,
-                    secondaryColor = secondaryColor,
-                    accentColor = accentColor
-                )
-            }
+            drawMinimalArrow(
+                centerX = centerX,
+                centerY = centerY,
+                length = arrowLength,
+                outlineColor = Color(0xFF1B1B1B).copy(alpha = alpha),
+                fillColor = Color.White.copy(alpha = alpha),
+                accentColor = theme.arrowPalette.accent.copy(alpha = alpha * 0.8f)
+            )
         }
     }
 }
 
-private fun DrawScope.drawLeafArrow(
+/**
+ * Draws a single minimalist arrow pointing right (caller handles rotation).
+ * The shape: a rounded teardrop body with a soft curved tail, plus a dark
+ * outline and a small accent dot near the tip.
+ */
+private fun DrawScope.drawMinimalArrow(
     centerX: Float,
     centerY: Float,
     length: Float,
-    primaryColor: Color,
-    secondaryColor: Color,
+    outlineColor: Color,
+    fillColor: Color,
     accentColor: Color
 ) {
     val tipX = centerX + length
-    val tailX = centerX - length * 0.6f
-    val leafWidth = length * 0.5f
+    val tailX = centerX - length * 0.55f
+    val bodyWidth = length * 0.42f
 
-    // Leaf body (pointing right by default, rotation handles direction)
-    val leafPath = Path().apply {
-        moveTo(tipX, centerY) // tip
-        // Upper curve
-        cubicTo(
-            centerX + length * 0.3f, centerY - leafWidth,
-            centerX - length * 0.2f, centerY - leafWidth * 0.7f,
-            tailX, centerY
-        )
-        // Lower curve
-        cubicTo(
-            centerX - length * 0.2f, centerY + leafWidth * 0.7f,
-            centerX + length * 0.3f, centerY + leafWidth,
-            tipX, centerY
-        )
-        close()
-    }
-
-    // Draw leaf shadow
-    drawPath(
-        path = leafPath,
-        color = Color(0x40000000),
-        style = Fill
-    )
-
-    // Draw leaf body
-    drawPath(
-        path = leafPath,
-        color = primaryColor,
-        style = Fill
-    )
-
-    // Draw leaf vein (center line)
-    drawLine(
-        color = secondaryColor,
-        start = Offset(tipX, centerY),
-        end = Offset(tailX, centerY),
-        strokeWidth = 2.dp.toPx()
-    )
-
-    // Draw leaf veins (side veins)
-    val veinCount = 4
-    for (i in 1..veinCount) {
-        val t = i.toFloat() / (veinCount + 1)
-        val veinX = tailX + (tipX - tailX) * t
-        val veinLength = leafWidth * 0.4f * (1f - t * 0.5f)
-
-        // Upper vein
-        drawLine(
-            color = secondaryColor.copy(alpha = 0.5f),
-            start = Offset(veinX, centerY),
-            end = Offset(veinX - veinLength * 0.3f, centerY - veinLength),
-            strokeWidth = 1.dp.toPx()
-        )
-        // Lower vein
-        drawLine(
-            color = secondaryColor.copy(alpha = 0.5f),
-            start = Offset(veinX, centerY),
-            end = Offset(veinX - veinLength * 0.3f, centerY + veinLength),
-            strokeWidth = 1.dp.toPx()
-        )
-    }
-
-    // Arrow tip accent
-    val tipPath = Path().apply {
-        moveTo(tipX + length * 0.1f, centerY)
-        lineTo(tipX - length * 0.1f, centerY - leafWidth * 0.3f)
-        lineTo(tipX - length * 0.1f, centerY + leafWidth * 0.3f)
-        close()
-    }
-    drawPath(
-        path = tipPath,
-        color = accentColor,
-        style = Fill
-    )
-}
-
-// Ocean-themed arrow: fish silhouette with a wavy tail, pointing in the rotation direction.
-private fun DrawScope.drawOceanArrow(
-    centerX: Float,
-    centerY: Float,
-    length: Float,
-    primaryColor: Color,
-    secondaryColor: Color,
-    accentColor: Color
-) {
-    val tipX = centerX + length
-    val tailX = centerX - length * 0.7f
-    val bodyHeight = length * 0.55f
-
-    // Fish body (rounded, pointing right; rotation handles direction)
+    // Soft body: rounded teardrop with a slightly curved tail.
     val bodyPath = Path().apply {
         moveTo(tipX, centerY)
-        // Upper belly curve
+        // Top curve
         cubicTo(
-            centerX + length * 0.4f, centerY - bodyHeight,
-            centerX - length * 0.1f, centerY - bodyHeight * 0.85f,
-            tailX + length * 0.1f, centerY - bodyHeight * 0.15f
+            centerX + length * 0.3f, centerY - bodyWidth,
+            centerX - length * 0.05f, centerY - bodyWidth * 0.9f,
+            tailX + length * 0.15f, centerY - bodyWidth * 0.1f
         )
-        // Top of tail notch
-        lineTo(centerX - length * 0.7f, centerY - bodyHeight * 0.6f)
-        // Inner tail notch
-        lineTo(centerX - length * 0.45f, centerY)
-        // Bottom of tail notch
-        lineTo(centerX - length * 0.7f, centerY + bodyHeight * 0.6f)
-        // Tail attachment bottom
-        lineTo(tailX + length * 0.1f, centerY + bodyHeight * 0.15f)
-        // Lower belly curve back to tip
+        // Tail tip (rounded)
         cubicTo(
-            centerX - length * 0.1f, centerY + bodyHeight * 0.85f,
-            centerX + length * 0.4f, centerY + bodyHeight,
+            tailX, centerY,
+            tailX, centerY,
+            tailX + length * 0.15f, centerY + bodyWidth * 0.1f
+        )
+        // Bottom curve back to head
+        cubicTo(
+            centerX - length * 0.05f, centerY + bodyWidth * 0.9f,
+            centerX + length * 0.3f, centerY + bodyWidth,
             tipX, centerY
         )
         close()
     }
 
-    // Soft shadow
+    // Fill
     drawPath(
         path = bodyPath,
-        color = Color(0x40000000),
+        color = fillColor,
         style = Fill
     )
 
-    // Fish body fill
+    // Dark outline
     drawPath(
         path = bodyPath,
-        color = primaryColor,
-        style = Fill
+        color = outlineColor,
+        style = Stroke(width = 2.dp.toPx())
     )
 
-    // Wavy "spine" / ridge along the body
-    val spinePath = Path().apply {
-        moveTo(tailX + length * 0.15f, centerY)
-        val waveAmp = bodyHeight * 0.12f
-        val segments = 4
-        for (i in 1..segments) {
-            val t = i.toFloat() / segments
-            val x = tailX + length * 0.15f + (tipX - tailX - length * 0.25f) * t
-            val y = centerY + if (i % 2 == 0) -waveAmp else waveAmp
-            lineTo(x, y)
-        }
-    }
-    drawPath(
-        path = spinePath,
-        color = secondaryColor.copy(alpha = 0.7f),
-        style = Stroke(width = 1.5.dp.toPx())
-    )
-
-    // Eye (small accent circle near the tip)
-    val eyeRadius = length * 0.06f
+    // Small accent dot near the head (theme-tinted).
+    val accentRadius = length * 0.06f
     drawCircle(
-        color = Color.White,
-        radius = eyeRadius,
-        center = Offset(centerX + length * 0.55f, centerY - bodyHeight * 0.25f)
-    )
-    drawCircle(
-        color = secondaryColor,
-        radius = eyeRadius * 0.55f,
-        center = Offset(centerX + length * 0.55f, centerY - bodyHeight * 0.25f)
-    )
-
-    // Arrow accent: small wave-mark near the tip
-    val tipPath = Path().apply {
-        moveTo(tipX + length * 0.08f, centerY)
-        cubicTo(
-            tipX - length * 0.05f, centerY - bodyHeight * 0.25f,
-            tipX - length * 0.15f, centerY + bodyHeight * 0.25f,
-            tipX - length * 0.05f, centerY
-        )
-        close()
-    }
-    drawPath(
-        path = tipPath,
         color = accentColor,
-        style = Fill
+        radius = accentRadius,
+        center = Offset(centerX + length * 0.4f, centerY)
     )
 }
