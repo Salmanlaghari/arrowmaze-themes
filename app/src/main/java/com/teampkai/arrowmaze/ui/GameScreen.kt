@@ -203,6 +203,7 @@ fun GameApp() {
                     soundManager.playButtonTap()
                     persistCurrentProgress()
                 },
+                onEngineStateChanged = { gameState = engine.state },
                 onMoveResult = { result ->
                     gameState = engine.state
                     when (result) {
