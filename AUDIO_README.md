@@ -1,6 +1,6 @@
 # Audio assets
 
-The WAV files in this directory are **placeholder sounds** generated programmatically
+The WAV files in `app/src/main/res/raw/` are **placeholder sounds** generated programmatically
 as simple sine-wave tones (see `scripts/generate_sounds.py`). They are intentionally
 minimal and exist so the SoundManager wiring is testable end-to-end.
 
