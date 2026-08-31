@@ -1,6 +1,12 @@
 package com.teampkai.arrowmaze.ui
 
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.background
@@ -38,6 +44,74 @@ enum class Screen {
 }
 
 @Composable
+fun AmbientAnimation(animation: String, modifier: Modifier = Modifier.fillMaxSize()) {
+    val transition = rememberInfiniteTransition(label = "ambient")
+    val t by transition.animateFloat(
+        initialValue = 0f,
+        targetValue = 1f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(durationMillis = 8000, easing = LinearEasing),
+            repeatMode = RepeatMode.Restart
+        ),
+        label = "ambient-t"
+    )
+
+    androidx.compose.foundation.Canvas(modifier = modifier) {
+        val w = size.width
+        val h = size.height
+
+        when (animation) {
+            "birds" -> {
+                // 4 small birds drifting across horizontally at different heights.
+                val birdCount = 4
+                for (i in 0 until birdCount) {
+                    val rawProgress = (t + i * 0.25f) % 1f
+                    val x = (rawProgress * (w + 80f)) - 40f
+                    val y = h * (0.1f + i * 0.12f)
+                    val wingSpan = 18f
+
+                    // Bird shape: two small arcs forming a "v"
+                    drawLine(
+                        color = Color.White.copy(alpha = 0.85f),
+                        start = Offset(x - wingSpan, y),
+                        end = Offset(x, y - 6f),
+                        strokeWidth = 2f
+                    )
+                    drawLine(
+                        color = Color.White.copy(alpha = 0.85f),
+                        start = Offset(x, y - 6f),
+                        end = Offset(x + wingSpan, y),
+                        strokeWidth = 2f
+                    )
+                }
+            }
+            "bubbles" -> {
+                // Small circles rising vertically with a slight horizontal drift.
+                val bubbleCount = 8
+                for (i in 0 until bubbleCount) {
+                    val rawProgress = (t + i * 0.125f) % 1f
+                    val x = (i * (w / bubbleCount)) +
+                        (Math.sin((t + i) * Math.PI * 2).toFloat()) * 12f
+                    val y = h - rawProgress * h
+                    val radius = 4f + (i % 3) * 2f
+
+                    drawCircle(
+                        color = Color.White.copy(alpha = 0.55f),
+                        radius = radius,
+                        center = Offset(x, y)
+                    )
+                    drawCircle(
+                        color = Color.White.copy(alpha = 0.9f),
+                        radius = radius * 0.3f,
+                        center = Offset(x - radius * 0.3f, y - radius * 0.3f)
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
 fun GameApp() {
     val engine = remember { GameEngine() }
     var gameState by remember { mutableStateOf(engine.startNewGame()) }
@@ -48,7 +122,12 @@ fun GameApp() {
         Screen.LEVEL_SELECT -> {
             LevelSelectScreen(
                 theme = theme,
+                currentThemeId = gameState.themeId,
                 highestLevel = gameState.currentLevel,
+                onThemeSelected = { themeId ->
+                    engine.setTheme(themeId)
+                    gameState = engine.state
+                },
                 onLevelSelected = { level ->
                     gameState = engine.jumpToLevel(level)
                     currentScreen = Screen.GAME
@@ -94,7 +173,9 @@ fun GameApp() {
 @Composable
 fun LevelSelectScreen(
     theme: Theme,
+    currentThemeId: Int,
     highestLevel: Int,
+    onThemeSelected: (Int) -> Unit,
     onLevelSelected: (Int) -> Unit
 ) {
     Box(
@@ -124,9 +205,33 @@ fun LevelSelectScreen(
                 color = Color.White.copy(alpha = 0.7f),
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(bottom = 24.dp),
+                    .padding(bottom = 16.dp),
                 textAlign = TextAlign.Center
             )
+
+            // Theme picker
+            Text(
+                text = "Choose Theme",
+                fontSize = 14.sp,
+                fontWeight = FontWeight.SemiBold,
+                color = Color.White.copy(alpha = 0.8f),
+                modifier = Modifier.padding(bottom = 8.dp)
+            )
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(bottom = 16.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                ThemeRegistry.allThemes.forEach { t ->
+                    ThemeCard(
+                        theme = t,
+                        isSelected = t.id == currentThemeId,
+                        modifier = Modifier.weight(1f),
+                        onClick = { onThemeSelected(t.id) }
+                    )
+                }
+            }
 
             Text(
                 text = "Select Level",
@@ -152,6 +257,49 @@ fun LevelSelectScreen(
                     )
                 }
             }
+        }
+    }
+}
+
+@Composable
+fun ThemeCard(
+    theme: Theme,
+    isSelected: Boolean,
+    modifier: Modifier = Modifier,
+    onClick: () -> Unit
+) {
+    Box(
+        modifier = modifier
+            .clip(RoundedCornerShape(12.dp))
+            .background(
+                if (isSelected) theme.arrowPalette.primary.copy(alpha = 0.4f)
+                else Color.White.copy(alpha = 0.1f)
+            )
+            .border(
+                width = if (isSelected) 2.dp else 1.dp,
+                color = if (isSelected) theme.arrowPalette.accent else Color.White.copy(alpha = 0.3f),
+                shape = RoundedCornerShape(12.dp)
+            )
+            .clickable { onClick() }
+            .padding(12.dp),
+        contentAlignment = Alignment.Center
+    ) {
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            Text(
+                text = theme.name,
+                fontSize = 16.sp,
+                fontWeight = FontWeight.Bold,
+                color = Color.White,
+                textAlign = TextAlign.Center
+            )
+            Text(
+                text = if (isSelected) "Selected" else "Tap to select",
+                fontSize = 10.sp,
+                color = Color.White.copy(alpha = 0.7f),
+                textAlign = TextAlign.Center
+            )
         }
     }
 }
@@ -216,6 +364,9 @@ fun GamePlayScreen(
     ) {
         // Parallax background layers
         ParallaxBackground(theme = theme)
+
+        // Ambient animation overlay (birds / bubbles / etc.)
+        AmbientAnimation(animation = theme.ambientAnimation)
 
         Column(
             modifier = Modifier
@@ -452,22 +603,23 @@ fun LevelCompleteScreen(
 
 @Composable
 fun ParallaxBackground(theme: Theme) {
-    // Simplified parallax using static layers with Canvas
-    // In a full implementation, these would animate based on scroll/gesture offset
     androidx.compose.foundation.Canvas(
         modifier = Modifier.fillMaxSize()
     ) {
         val w = size.width
         val h = size.height
 
-        // Far mountains (slowest parallax)
-        drawMountains(w, h, 0.15f, theme.backgroundColors[0].copy(alpha = 0.3f))
-
-        // Far trees
-        drawTreeLine(w, h, 0.4f, theme.backgroundColors[1].copy(alpha = 0.2f))
-
-        // Near trees
-        drawTreeLine(w, h, 0.7f, theme.backgroundColors[0].copy(alpha = 0.15f))
+        theme.parallaxLayers.forEach { layer ->
+            val baseColor = theme.backgroundColors.firstOrNull() ?: Color.White
+            when (layer.drawType) {
+                "mountains" -> drawMountains(w, h, layer.speed, baseColor.copy(alpha = 0.3f))
+                "trees_far" -> drawTreeLine(w, h, layer.speed, baseColor.copy(alpha = 0.2f))
+                "trees_near" -> drawTreeLine(w, h, layer.speed, baseColor.copy(alpha = 0.15f))
+                "deep_sea" -> drawDeepSea(w, h, layer.speed, baseColor.copy(alpha = 0.35f))
+                "coral" -> drawCoral(w, h, layer.speed, baseColor.copy(alpha = 0.25f))
+                "fish" -> drawFishLayer(w, h, layer.speed, theme.arrowPalette.accent.copy(alpha = 0.6f))
+            }
+        }
     }
 }
 
@@ -512,5 +664,111 @@ private fun DrawScope.drawTreeLine(width: Float, height: Float, heightFactor: Fl
 
         drawPath(trunkPath, color)
         drawPath(canopyPath, color)
+    }
+}
+
+private fun DrawScope.drawDeepSea(width: Float, height: Float, heightFactor: Float, color: Color) {
+    // Wavy deep-sea gradient silhouettes: a couple of overlapping rolling wave shapes.
+    val baseY1 = height * (1f - heightFactor)
+    val baseY2 = height * (1f - heightFactor * 0.7f)
+
+    val wave1 = androidx.compose.ui.graphics.Path().apply {
+        moveTo(0f, height)
+        var x = 0f
+        val step = width / 14f
+        while (x <= width) {
+            val y = baseY1 +
+                (Math.sin(x.toDouble() / width * Math.PI * 4) * height * 0.04f).toFloat() +
+                (Math.cos(x.toDouble() / width * Math.PI * 2) * height * 0.02f).toFloat()
+            lineTo(x, y.toFloat())
+            x += step
+        }
+        lineTo(width, height)
+        close()
+    }
+    drawPath(wave1, color)
+
+    val wave2 = androidx.compose.ui.graphics.Path().apply {
+        moveTo(0f, height)
+        var x = 0f
+        val step = width / 18f
+        while (x <= width) {
+            val y = baseY2 +
+                (Math.cos(x.toDouble() / width * Math.PI * 3) * height * 0.03f).toFloat() +
+                (Math.sin(x.toDouble() / width * Math.PI * 5) * height * 0.015f).toFloat()
+            lineTo(x, y.toFloat())
+            x += step
+        }
+        lineTo(width, height)
+        close()
+    }
+    drawPath(wave2, color.copy(alpha = (color.alpha * 0.7f).coerceIn(0f, 1f)))
+}
+
+private fun DrawScope.drawCoral(width: Float, height: Float, heightFactor: Float, color: Color) {
+    // Coral silhouettes rising from the bottom at varied heights.
+    val baseY = height * (1f - heightFactor * 0.4f)
+    val coralSpacing = width / 8f
+
+    for (i in 0..8) {
+        val x = i * coralSpacing + coralSpacing * 0.3f
+        val coralHeight = height * 0.1f +
+            (Math.sin(i.toDouble() * 1.7) * height * 0.04f).toFloat()
+
+        val stemPath = androidx.compose.ui.graphics.Path().apply {
+            moveTo(x - coralSpacing * 0.04f, baseY)
+            lineTo(x + coralSpacing * 0.04f, baseY)
+            lineTo(x + coralSpacing * 0.02f, baseY - coralHeight)
+            lineTo(x - coralSpacing * 0.02f, baseY - coralHeight)
+            close()
+        }
+        drawPath(stemPath, color)
+
+        // Branching top
+        val branchPath = androidx.compose.ui.graphics.Path().apply {
+            moveTo(x, baseY - coralHeight)
+            lineTo(x - coralSpacing * 0.12f, baseY - coralHeight * 0.7f)
+            moveTo(x, baseY - coralHeight)
+            lineTo(x + coralSpacing * 0.12f, baseY - coralHeight * 0.6f)
+            moveTo(x, baseY - coralHeight * 0.7f)
+            lineTo(x + coralSpacing * 0.08f, baseY - coralHeight * 0.95f)
+        }
+        drawPath(
+            path = branchPath,
+            color = color,
+            style = androidx.compose.ui.graphics.drawscope.Stroke(width = 2.dp.toPx())
+        )
+    }
+}
+
+private fun DrawScope.drawFishLayer(width: Float, height: Float, heightFactor: Float, color: Color) {
+    // Small fish silhouettes drifting across the upper portion of the canvas.
+    val fishY = height * (1f - heightFactor * 0.6f)
+    val fishCount = 6
+    val step = width / fishCount
+
+    for (i in 0 until fishCount) {
+        val baseX = i * step + step * 0.3f
+        val offset = (Math.sin(i.toDouble() * 2.3) * step * 0.3f).toFloat()
+        val cx = baseX + offset
+        val cy = fishY + (Math.cos(i.toDouble() * 1.1) * height * 0.04f).toFloat()
+        val fishWidth = step * 0.4f
+        val fishHeight = fishWidth * 0.45f
+
+        val fishPath = androidx.compose.ui.graphics.Path().apply {
+            moveTo(cx + fishWidth / 2f, cy)
+            cubicTo(
+                cx + fishWidth * 0.2f, cy - fishHeight,
+                cx - fishWidth * 0.3f, cy - fishHeight * 0.8f,
+                cx - fishWidth * 0.35f, cy
+            )
+            cubicTo(
+                cx - fishWidth * 0.3f, cy + fishHeight * 0.8f,
+                cx + fishWidth * 0.2f, cy + fishHeight,
+                cx + fishWidth / 2f, cy
+            )
+            close()
+        }
+        drawPath(fishPath, color)
     }
 }
