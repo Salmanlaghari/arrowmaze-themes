@@ -708,19 +708,21 @@ private fun ArrowCellView(
     val slide = slideProgress ?: 0f
     val shake = shakeProgress ?: 0f
 
-    val slideOffsetDp = cellSize * slide
+    // Convert slide offset (Dp) to pixels once, since graphicsLayer works in px.
+    val density = androidx.compose.ui.platform.LocalDensity.current
+    val slideOffsetPx = with(density) { (cellSize * slide).toPx() }
     val shakeOffsetPx = (kotlin.math.sin(shake * Math.PI * 6.0) * 6.0).toFloat()
 
     val translationX = when (slideDirection) {
-        Direction.LEFT -> -slideOffsetDp
-        Direction.RIGHT -> slideOffsetDp
-        Direction.UP, Direction.DOWN -> shakeOffsetPx.dp
-    } - shakeOffsetPx.dp
+        Direction.LEFT -> -slideOffsetPx
+        Direction.RIGHT -> slideOffsetPx
+        Direction.UP, Direction.DOWN -> shakeOffsetPx
+    } - shakeOffsetPx
 
     val translationY = when (slideDirection) {
-        Direction.UP -> -slideOffsetDp
-        Direction.DOWN -> slideOffsetDp
-        Direction.LEFT, Direction.RIGHT -> 0.dp
+        Direction.UP -> -slideOffsetPx
+        Direction.DOWN -> slideOffsetPx
+        Direction.LEFT, Direction.RIGHT -> 0f
     }
 
     val alpha = (1f - slide).coerceIn(0f, 1f)
@@ -729,8 +731,8 @@ private fun ArrowCellView(
         modifier = Modifier
             .size(cellSize - 4.dp)
             .graphicsLayer {
-                translationX = translationX.toPx()
-                translationY = translationY.toPx()
+                this.translationX = translationX
+                this.translationY = translationY
             }
             .alpha(alpha)
     ) {
