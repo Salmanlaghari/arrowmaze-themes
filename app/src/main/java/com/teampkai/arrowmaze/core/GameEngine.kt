@@ -35,9 +35,14 @@ class GameEngine {
             currentPathIndex = 0,
             isLevelComplete = false,
             isGameOver = false,
-            maze = maze
+            maze = maze,
+            themeId = state.themeId
         )
         return state
+    }
+
+    fun setTheme(themeId: Int) {
+        state = state.copy(themeId = themeId)
     }
 
     fun startNewGame(): GameState {

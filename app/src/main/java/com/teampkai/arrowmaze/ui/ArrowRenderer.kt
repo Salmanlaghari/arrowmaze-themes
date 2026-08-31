@@ -16,8 +16,6 @@ import androidx.compose.ui.unit.dp
 import com.teampkai.arrowmaze.generator.Direction
 import com.teampkai.arrowmaze.themes.Theme
 import com.teampkai.arrowmaze.themes.ThemeRegistry
-import kotlin.math.cos
-import kotlin.math.sin
 
 @Composable
 fun ArrowRenderer(
@@ -70,14 +68,29 @@ fun ArrowRenderer(
         }
 
         rotate(degrees = rotationAngle, pivot = Offset(centerX, centerY)) {
-            drawLeafArrow(
-                centerX = centerX,
-                centerY = centerY,
-                length = arrowLength,
-                primaryColor = if (isVisited) theme.arrowPalette.accent else theme.arrowPalette.primary,
-                secondaryColor = theme.arrowPalette.secondary,
-                accentColor = theme.arrowPalette.accent
-            )
+            val primaryColor = if (isVisited) theme.arrowPalette.accent else theme.arrowPalette.primary
+            val secondaryColor = theme.arrowPalette.secondary
+            val accentColor = theme.arrowPalette.accent
+
+            if (theme.id == ThemeRegistry.OCEAN.id) {
+                drawOceanArrow(
+                    centerX = centerX,
+                    centerY = centerY,
+                    length = arrowLength,
+                    primaryColor = primaryColor,
+                    secondaryColor = secondaryColor,
+                    accentColor = accentColor
+                )
+            } else {
+                drawLeafArrow(
+                    centerX = centerX,
+                    centerY = centerY,
+                    length = arrowLength,
+                    primaryColor = primaryColor,
+                    secondaryColor = secondaryColor,
+                    accentColor = accentColor
+                )
+            }
         }
     }
 }
@@ -171,32 +184,103 @@ private fun DrawScope.drawLeafArrow(
     )
 }
 
-// Standard geometric arrow for non-jungle themes
-private fun DrawScope.drawGeometricArrow(
+// Ocean-themed arrow: fish silhouette with a wavy tail, pointing in the rotation direction.
+private fun DrawScope.drawOceanArrow(
     centerX: Float,
     centerY: Float,
     length: Float,
     primaryColor: Color,
+    secondaryColor: Color,
     accentColor: Color
 ) {
     val tipX = centerX + length
-    val tailX = centerX - length * 0.5f
-    val halfWidth = length * 0.35f
+    val tailX = centerX - length * 0.7f
+    val bodyHeight = length * 0.55f
 
-    // Arrow shaft
-    drawLine(
-        color = primaryColor,
-        start = Offset(tailX, centerY),
-        end = Offset(tipX - halfWidth * 0.5f, centerY),
-        strokeWidth = 3.dp.toPx()
-    )
-
-    // Arrow head
-    val headPath = Path().apply {
+    // Fish body (rounded, pointing right; rotation handles direction)
+    val bodyPath = Path().apply {
         moveTo(tipX, centerY)
-        lineTo(tipX - halfWidth, centerY - halfWidth)
-        lineTo(tipX - halfWidth, centerY + halfWidth)
+        // Upper belly curve
+        cubicTo(
+            centerX + length * 0.4f, centerY - bodyHeight,
+            centerX - length * 0.1f, centerY - bodyHeight * 0.85f,
+            tailX + length * 0.1f, centerY - bodyHeight * 0.15f
+        )
+        // Top of tail notch
+        lineTo(centerX - length * 0.7f, centerY - bodyHeight * 0.6f)
+        // Inner tail notch
+        lineTo(centerX - length * 0.45f, centerY)
+        // Bottom of tail notch
+        lineTo(centerX - length * 0.7f, centerY + bodyHeight * 0.6f)
+        // Tail attachment bottom
+        lineTo(tailX + length * 0.1f, centerY + bodyHeight * 0.15f)
+        // Lower belly curve back to tip
+        cubicTo(
+            centerX - length * 0.1f, centerY + bodyHeight * 0.85f,
+            centerX + length * 0.4f, centerY + bodyHeight,
+            tipX, centerY
+        )
         close()
     }
-    drawPath(path = headPath, color = accentColor, style = Fill)
+
+    // Soft shadow
+    drawPath(
+        path = bodyPath,
+        color = Color(0x40000000),
+        style = Fill
+    )
+
+    // Fish body fill
+    drawPath(
+        path = bodyPath,
+        color = primaryColor,
+        style = Fill
+    )
+
+    // Wavy "spine" / ridge along the body
+    val spinePath = Path().apply {
+        moveTo(tailX + length * 0.15f, centerY)
+        val waveAmp = bodyHeight * 0.12f
+        val segments = 4
+        for (i in 1..segments) {
+            val t = i.toFloat() / segments
+            val x = tailX + length * 0.15f + (tipX - tailX - length * 0.25f) * t
+            val y = centerY + if (i % 2 == 0) -waveAmp else waveAmp
+            lineTo(x, y)
+        }
+    }
+    drawPath(
+        path = spinePath,
+        color = secondaryColor.copy(alpha = 0.7f),
+        style = Stroke(width = 1.5.dp.toPx())
+    )
+
+    // Eye (small accent circle near the tip)
+    val eyeRadius = length * 0.06f
+    drawCircle(
+        color = Color.White,
+        radius = eyeRadius,
+        center = Offset(centerX + length * 0.55f, centerY - bodyHeight * 0.25f)
+    )
+    drawCircle(
+        color = secondaryColor,
+        radius = eyeRadius * 0.55f,
+        center = Offset(centerX + length * 0.55f, centerY - bodyHeight * 0.25f)
+    )
+
+    // Arrow accent: small wave-mark near the tip
+    val tipPath = Path().apply {
+        moveTo(tipX + length * 0.08f, centerY)
+        cubicTo(
+            tipX - length * 0.05f, centerY - bodyHeight * 0.25f,
+            tipX - length * 0.15f, centerY + bodyHeight * 0.25f,
+            tipX - length * 0.05f, centerY
+        )
+        close()
+    }
+    drawPath(
+        path = tipPath,
+        color = accentColor,
+        style = Fill
+    )
 }
