@@ -31,6 +31,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.teampkai.arrowmaze.audio.SoundManager
 import com.teampkai.arrowmaze.core.GameEngine
 import com.teampkai.arrowmaze.core.GameState
 import com.teampkai.arrowmaze.core.MoveResult
@@ -119,9 +120,19 @@ fun AmbientAnimation(animation: String, modifier: Modifier = Modifier.fillMaxSiz
 fun GameApp() {
     val context = LocalContext.current
     val progressStore = remember { GameProgressStore(context) }
+    val soundManager = remember { SoundManager(context) }
+    DisposableEffect(Unit) {
+        onDispose { soundManager.release() }
+    }
     val savedProgress by progressStore.progress.collectAsState(
-        initial = GameProgress(highestLevel = 1, score = 0, themeId = 1)
+        initial = GameProgress(highestLevel = 1, score = 0, themeId = 1, soundEnabled = true)
     )
+
+    // Keep SoundManager in sync with the persisted preference.
+    LaunchedEffect(savedProgress.soundEnabled) {
+        soundManager.soundEnabled = savedProgress.soundEnabled
+    }
+
     val coroutineScope = rememberCoroutineScope()
 
     val engine = remember {
@@ -138,25 +149,38 @@ fun GameApp() {
     var currentScreen by remember { mutableStateOf(Screen.LEVEL_SELECT) }
     val theme = ThemeRegistry.getTheme(gameState.themeId)
 
+    fun persistCurrentProgress() {
+        coroutineScope.launch {
+            progressStore.saveProgress(
+                highestLevel = gameState.highestLevelUnlocked,
+                score = gameState.score,
+                themeId = gameState.themeId,
+                soundEnabled = soundManager.soundEnabled
+            )
+        }
+    }
+
     when (currentScreen) {
         Screen.LEVEL_SELECT -> {
             LevelSelectScreen(
                 theme = theme,
                 currentThemeId = gameState.themeId,
                 highestLevel = gameState.highestLevelUnlocked,
+                soundEnabled = soundManager.soundEnabled,
+                onToggleSound = {
+                    soundManager.soundEnabled = !soundManager.soundEnabled
+                    soundManager.playButtonTap()
+                    persistCurrentProgress()
+                },
                 onThemeSelected = { themeId ->
                     engine.setTheme(themeId)
                     gameState = engine.state
-                    coroutineScope.launch {
-                        progressStore.saveProgress(
-                            highestLevel = gameState.highestLevelUnlocked,
-                            score = gameState.score,
-                            themeId = gameState.themeId
-                        )
-                    }
+                    soundManager.playButtonTap()
+                    persistCurrentProgress()
                 },
                 onLevelSelected = { level ->
                     gameState = engine.jumpToLevel(level)
+                    soundManager.playButtonTap()
                     currentScreen = Screen.GAME
                 }
             )
@@ -166,16 +190,23 @@ fun GameApp() {
                 engine = engine,
                 gameState = gameState,
                 theme = theme,
+                soundManager = soundManager,
+                onToggleSound = {
+                    soundManager.soundEnabled = !soundManager.soundEnabled
+                    soundManager.playButtonTap()
+                    persistCurrentProgress()
+                },
                 onMoveResult = { result ->
                     gameState = engine.state
-                    if (result is MoveResult.LevelComplete) {
-                        coroutineScope.launch {
-                            progressStore.saveProgress(
-                                highestLevel = gameState.highestLevelUnlocked,
-                                score = gameState.score,
-                                themeId = gameState.themeId
-                            )
+                    when (result) {
+                        is MoveResult.Correct -> soundManager.playCorrectMove()
+                        is MoveResult.Wrong -> soundManager.playWrongMove()
+                        is MoveResult.LevelComplete -> {
+                            soundManager.playLevelComplete()
+                            persistCurrentProgress()
                         }
+                    }
+                    if (result is MoveResult.LevelComplete) {
                         currentScreen = Screen.LEVEL_COMPLETE
                     } else if (result is MoveResult.Wrong) {
                         // Wrong move, game over - retry
@@ -183,6 +214,7 @@ fun GameApp() {
                     }
                 },
                 onBack = {
+                    soundManager.playButtonTap()
                     currentScreen = Screen.LEVEL_SELECT
                 }
             )
@@ -193,17 +225,13 @@ fun GameApp() {
                 score = gameState.score,
                 theme = theme,
                 onNextLevel = {
+                    soundManager.playButtonTap()
                     gameState = engine.advanceToNextLevel()
-                    coroutineScope.launch {
-                        progressStore.saveProgress(
-                            highestLevel = gameState.highestLevelUnlocked,
-                            score = gameState.score,
-                            themeId = gameState.themeId
-                        )
-                    }
+                    persistCurrentProgress()
                     currentScreen = Screen.GAME
                 },
                 onBackToLevels = {
+                    soundManager.playButtonTap()
                     currentScreen = Screen.LEVEL_SELECT
                 }
             )
@@ -216,6 +244,8 @@ fun LevelSelectScreen(
     theme: Theme,
     currentThemeId: Int,
     highestLevel: Int,
+    soundEnabled: Boolean,
+    onToggleSound: () -> Unit,
     onThemeSelected: (Int) -> Unit,
     onLevelSelected: (Int) -> Unit
 ) {
@@ -229,16 +259,24 @@ fun LevelSelectScreen(
                 .fillMaxSize()
                 .padding(16.dp)
         ) {
-            Text(
-                text = "Arrow Maze",
-                fontSize = 32.sp,
-                fontWeight = FontWeight.Bold,
-                color = Color.White,
+            Row(
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(bottom = 8.dp),
-                textAlign = TextAlign.Center
-            )
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Spacer(modifier = Modifier.width(48.dp))
+                Text(
+                    text = "Arrow Maze",
+                    fontSize = 32.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = Color.White,
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier.weight(1f)
+                )
+                SoundToggleButton(soundEnabled = soundEnabled, onClick = onToggleSound)
+            }
 
             Text(
                 text = "${theme.name} Theme",
@@ -346,6 +384,26 @@ fun ThemeCard(
 }
 
 @Composable
+fun SoundToggleButton(
+    soundEnabled: Boolean,
+    onClick: () -> Unit
+) {
+    Box(
+        modifier = Modifier
+            .size(48.dp)
+            .clip(RoundedCornerShape(24.dp))
+            .background(Color.White.copy(alpha = 0.1f))
+            .clickable { onClick() },
+        contentAlignment = Alignment.Center
+    ) {
+        Text(
+            text = if (soundEnabled) "🔊" else "🔇",
+            fontSize = 24.sp
+        )
+    }
+}
+
+@Composable
 fun LevelButton(
     level: Int,
     isUnlocked: Boolean,
@@ -383,6 +441,8 @@ fun GamePlayScreen(
     engine: GameEngine,
     gameState: GameState,
     theme: Theme,
+    soundManager: SoundManager,
+    onToggleSound: () -> Unit,
     onMoveResult: (MoveResult) -> Unit,
     onBack: () -> Unit
 ) {
@@ -433,11 +493,14 @@ fun GamePlayScreen(
                     color = Color.White
                 )
 
-                // Heart
-                Text(
-                    text = "❤️",
-                    fontSize = 24.sp
-                )
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    SoundToggleButton(
+                        soundEnabled = soundManager.soundEnabled,
+                        onClick = onToggleSound
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(text = "❤️", fontSize = 24.sp)
+                }
             }
 
             // Score
