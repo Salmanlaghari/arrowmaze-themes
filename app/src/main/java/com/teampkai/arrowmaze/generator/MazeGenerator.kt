@@ -59,11 +59,14 @@ object MazeGenerator {
 
     fun calculateArrowCount(level: Int, gridSize: Int): Int {
         // Roughly 15..20 at level 1, growing toward 60..100+ at high levels.
-        // The hard cap is gridSize*gridSize (every cell).
+        // The hard cap is gridSize*gridSize minus 2 (keep a couple of empty cells).
         val base = 15
         val growth = level.toFloat() / 18f
         val cap = (gridSize * gridSize) - 2
-        return (base + growth.toInt()).coerceIn(15, cap)
+        // Use coerceAtMost first, then coerceAtLeast — coerceIn throws when
+        // minimumValue > maximumValue, which happens on small grids (4×4) where
+        // cap (14) is less than base (15).
+        return (base + growth.toInt()).coerceAtMost(cap).coerceAtLeast(1)
     }
 
     /**
