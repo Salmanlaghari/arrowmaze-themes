@@ -26,6 +26,7 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.DrawScope
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -33,9 +34,12 @@ import androidx.compose.ui.unit.sp
 import com.teampkai.arrowmaze.core.GameEngine
 import com.teampkai.arrowmaze.core.GameState
 import com.teampkai.arrowmaze.core.MoveResult
+import com.teampkai.arrowmaze.data.GameProgress
+import com.teampkai.arrowmaze.data.GameProgressStore
 import com.teampkai.arrowmaze.generator.Direction
 import com.teampkai.arrowmaze.themes.Theme
 import com.teampkai.arrowmaze.themes.ThemeRegistry
+import kotlinx.coroutines.launch
 
 enum class Screen {
     LEVEL_SELECT,
@@ -113,8 +117,24 @@ fun AmbientAnimation(animation: String, modifier: Modifier = Modifier.fillMaxSiz
 
 @Composable
 fun GameApp() {
-    val engine = remember { GameEngine() }
-    var gameState by remember { mutableStateOf(engine.startNewGame()) }
+    val context = LocalContext.current
+    val progressStore = remember { GameProgressStore(context) }
+    val savedProgress by progressStore.progress.collectAsState(
+        initial = GameProgress(highestLevel = 1, score = 0, themeId = 1)
+    )
+    val coroutineScope = rememberCoroutineScope()
+
+    val engine = remember {
+        GameEngine(
+            initialState = GameState(
+                currentLevel = 1,
+                highestLevelUnlocked = savedProgress.highestLevel,
+                score = savedProgress.score,
+                themeId = savedProgress.themeId
+            )
+        )
+    }
+    var gameState by remember { mutableStateOf(engine.state) }
     var currentScreen by remember { mutableStateOf(Screen.LEVEL_SELECT) }
     val theme = ThemeRegistry.getTheme(gameState.themeId)
 
@@ -123,10 +143,17 @@ fun GameApp() {
             LevelSelectScreen(
                 theme = theme,
                 currentThemeId = gameState.themeId,
-                highestLevel = gameState.currentLevel,
+                highestLevel = gameState.highestLevelUnlocked,
                 onThemeSelected = { themeId ->
                     engine.setTheme(themeId)
                     gameState = engine.state
+                    coroutineScope.launch {
+                        progressStore.saveProgress(
+                            highestLevel = gameState.highestLevelUnlocked,
+                            score = gameState.score,
+                            themeId = gameState.themeId
+                        )
+                    }
                 },
                 onLevelSelected = { level ->
                     gameState = engine.jumpToLevel(level)
@@ -142,6 +169,13 @@ fun GameApp() {
                 onMoveResult = { result ->
                     gameState = engine.state
                     if (result is MoveResult.LevelComplete) {
+                        coroutineScope.launch {
+                            progressStore.saveProgress(
+                                highestLevel = gameState.highestLevelUnlocked,
+                                score = gameState.score,
+                                themeId = gameState.themeId
+                            )
+                        }
                         currentScreen = Screen.LEVEL_COMPLETE
                     } else if (result is MoveResult.Wrong) {
                         // Wrong move, game over - retry
@@ -160,6 +194,13 @@ fun GameApp() {
                 theme = theme,
                 onNextLevel = {
                     gameState = engine.advanceToNextLevel()
+                    coroutineScope.launch {
+                        progressStore.saveProgress(
+                            highestLevel = gameState.highestLevelUnlocked,
+                            score = gameState.score,
+                            themeId = gameState.themeId
+                        )
+                    }
                     currentScreen = Screen.GAME
                 },
                 onBackToLevels = {

@@ -6,6 +6,7 @@ import com.teampkai.arrowmaze.generator.MazeResult
 
 data class GameState(
     val currentLevel: Int = 1,
+    val highestLevelUnlocked: Int = 1,
     val lives: Int = 1,
     val score: Int = 0,
     val currentPathIndex: Int = 0,
@@ -21,15 +22,16 @@ sealed class MoveResult {
     object LevelComplete : MoveResult()
 }
 
-class GameEngine {
+class GameEngine(initialState: GameState = GameState()) {
 
-    var state: GameState = GameState()
+    var state: GameState = initialState
         private set
 
     fun startLevel(level: Int, seed: Long = System.currentTimeMillis()): GameState {
         val maze = MazeGenerator.generate(level, seed)
         state = GameState(
             currentLevel = level,
+            highestLevelUnlocked = maxOf(state.highestLevelUnlocked, level, state.currentLevel),
             lives = 1,
             score = state.score,
             currentPathIndex = 0,
@@ -75,7 +77,8 @@ class GameEngine {
             state = state.copy(
                 currentPathIndex = newIndex,
                 isLevelComplete = true,
-                score = state.score + bonus
+                score = state.score + bonus,
+                highestLevelUnlocked = maxOf(state.highestLevelUnlocked, state.currentLevel)
             )
             MoveResult.LevelComplete
         } else {
