@@ -22,8 +22,8 @@ import com.teampkai.arrowmaze.themes.ThemeRegistry
  * mechanic. Style goals (matching the reference look):
  *   - Dark outline, light/white fill — the body color stays neutral so the
  *     theme reads through the *background* colors, not the arrow itself.
- *   - Rounded curved tail so the arrow has the soft "winding" feel of the
- *     reference image, not a sharp geometric arrowhead.
+ *   - Clear triangular arrowhead + visible rectangular tail so the shape is
+ *     unambiguously an arrow (not a leaf/petal/teardrop).
  *   - Theme contributes via a small accent dot near the tip (very subtle tint).
  *   - `alpha` lets the same renderer fade out an arrow during the slide-out
  *     animation.
@@ -51,7 +51,7 @@ fun ArrowRenderer(
         val canvasHeight = size.height
         val centerX = canvasWidth / 2f
         val centerY = canvasHeight / 2f
-        val arrowLength = canvasWidth * 0.36f
+        val arrowLength = canvasWidth * 0.38f
 
         // Soft glow for "on the solution path" or currently-hinted cells.
         if (isOnPath && !isVisited) {
@@ -70,7 +70,7 @@ fun ArrowRenderer(
         }
 
         rotate(degrees = rotationAngle, pivot = Offset(centerX, centerY)) {
-            drawMinimalArrow(
+            drawArrowShape(
                 centerX = centerX,
                 centerY = centerY,
                 length = arrowLength,
@@ -84,10 +84,10 @@ fun ArrowRenderer(
 
 /**
  * Draws a single minimalist arrow pointing right (caller handles rotation).
- * The shape: a rounded teardrop body with a soft curved tail, plus a dark
- * outline and a small accent dot near the tip.
+ * The shape: a clear triangular arrowhead at the tip with a rectangular shaft
+ * extending back. Straight lines (not curves) so the arrowhead is unambiguous.
  */
-private fun DrawScope.drawMinimalArrow(
+private fun DrawScope.drawArrowShape(
     centerX: Float,
     centerY: Float,
     length: Float,
@@ -95,31 +95,29 @@ private fun DrawScope.drawMinimalArrow(
     fillColor: Color,
     accentColor: Color
 ) {
+    // The arrow is drawn pointing right. It consists of:
+    //   - A rectangular tail/shaft from `tailX` to `shaftEndX`
+    //   - A triangular arrowhead from `shaftEndX` to `tipX`
     val tipX = centerX + length
-    val tailX = centerX - length * 0.55f
-    val bodyWidth = length * 0.42f
+    val tailX = centerX - length * 0.7f
+    val shaftEndX = centerX + length * 0.35f
+    val shaftHalfHeight = length * 0.14f
+    val headHalfWidth = length * 0.34f
 
-    // Soft body: rounded teardrop with a slightly curved tail.
     val bodyPath = Path().apply {
-        moveTo(tipX, centerY)
-        // Top curve
-        cubicTo(
-            centerX + length * 0.3f, centerY - bodyWidth,
-            centerX - length * 0.05f, centerY - bodyWidth * 0.9f,
-            tailX + length * 0.15f, centerY - bodyWidth * 0.1f
-        )
-        // Tail tip (rounded)
-        cubicTo(
-            tailX, centerY,
-            tailX, centerY,
-            tailX + length * 0.15f, centerY + bodyWidth * 0.1f
-        )
-        // Bottom curve back to head
-        cubicTo(
-            centerX - length * 0.05f, centerY + bodyWidth * 0.9f,
-            centerX + length * 0.3f, centerY + bodyWidth,
-            tipX, centerY
-        )
+        // Start at the top of the arrowhead base.
+        moveTo(shaftEndX, centerY - headHalfWidth)
+        // Up to the tip.
+        lineTo(tipX, centerY)
+        // Down to the bottom of the arrowhead base.
+        lineTo(shaftEndX, centerY + headHalfWidth)
+        // Back along the bottom of the shaft to the tail.
+        lineTo(tailX, centerY + shaftHalfHeight)
+        // Around the rounded tail tip.
+        lineTo(tailX - length * 0.05f, centerY)
+        lineTo(tailX, centerY - shaftHalfHeight)
+        // Close back to the start.
+        lineTo(shaftEndX, centerY - headHalfWidth)
         close()
     }
 
@@ -138,10 +136,10 @@ private fun DrawScope.drawMinimalArrow(
     )
 
     // Small accent dot near the head (theme-tinted).
-    val accentRadius = length * 0.06f
+    val accentRadius = length * 0.05f
     drawCircle(
         color = accentColor,
         radius = accentRadius,
-        center = Offset(centerX + length * 0.4f, centerY)
+        center = Offset(centerX + length * 0.55f, centerY)
     )
 }
