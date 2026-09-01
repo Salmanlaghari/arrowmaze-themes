@@ -73,43 +73,37 @@ object MazeGenerator {
     }
 
     fun calculateGridSize(level: Int): Int {
-        // 5×5 at level 1, growing slowly. Cap at 9 to keep cells tappable.
-        // Level 1 is intentionally 5×5 (not 4×4) because the backwards-
-        // construction algorithm has a hard capacity of ~8 arrows on a 4×4
-        // grid, which made the board look nearly empty. 5×5 gives the
-        // algorithm room to place 6–8 arrows reliably.
-        return (5 + ((level - 1) / 60).toInt()).coerceIn(5, 9)
+        // 5×5 at level 1, growing by 1 every 100 levels. Cap at 9 to keep
+        // cells tappable. With 1500+ levels this gives:
+        //   L1–100: 5×5, L101–200: 6×6, L201–300: 7×7, L301–400: 8×8, L401+: 9×9.
+        return (5 + ((level - 1) / 100).toInt()).coerceIn(5, 9)
     }
 
     fun calculateArrowCount(level: Int, gridSize: Int): Int {
-        // The backwards-construction algorithm has a hard capacity that depends
-        // on grid size: each placed arrow claims a path of 1..(gridSize-1) cells
-        // that no later arrow can reuse. We cap `arrowCount` to a value the
-        // generator can actually achieve, and we scale the cap with grid size
-        // so the difficulty curve still feels right at higher levels.
+        // Smooth 1–2 difficulty increment per level:
+        //   - Start at 6 arrows (easy on 5×5)
+        //   - Grow by 1 arrow every 8 levels, so each level adds ~1 arrow
+        //   - Cap at the algorithm's real capacity for this grid size
         val base = 6
-        val growth = level.toFloat() / 18f
+        val growth = level / 8
         val cap = maxArrowCapacity(gridSize)
-        // Use coerceAtMost first, then coerceAtLeast — coerceIn throws when
-        // minimumValue > maximumValue.
-        return (base + growth.toInt()).coerceAtMost(cap).coerceAtLeast(1)
+        return (base + growth).coerceAtMost(cap).coerceAtLeast(1)
     }
 
     /**
      * Maximum number of arrows the backwards-construction algorithm can place
-     * for a given grid size. Empirically, on 4×4 the algorithm places at most
-     * ~7 arrows; on 9×9 up to ~20. This is well below `gridSize*gridSize` and
-     * is the true hard cap for this algorithm.
+     * for a given grid size. Empirically, on 5×5 the algorithm places up to
+     * ~8 arrows; on 9×9 up to ~20. This is the true hard cap for this
+     * algorithm (well below gridSize*gridSize).
      */
     fun maxArrowCapacity(gridSize: Int): Int {
         return when (gridSize) {
-            4 -> 6
-            5 -> 8
-            6 -> 11
-            7 -> 14
-            8 -> 17
+            5 -> 10
+            6 -> 13
+            7 -> 16
+            8 -> 18
             9 -> 20
-            else -> ((gridSize * 2) + 2).coerceAtMost(gridSize * gridSize - 2)
+            else -> ((gridSize * 2) + 4).coerceAtMost(gridSize * gridSize - 2)
         }
     }
 

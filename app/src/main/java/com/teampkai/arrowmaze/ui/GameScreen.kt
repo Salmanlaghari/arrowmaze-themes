@@ -35,6 +35,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.teampkai.arrowmaze.audio.MusicManager
 import com.teampkai.arrowmaze.audio.SoundManager
 import com.teampkai.arrowmaze.core.GameEngine
 import com.teampkai.arrowmaze.core.GameState
@@ -128,8 +129,12 @@ fun GameApp() {
     val context = LocalContext.current
     val progressStore = remember { GameProgressStore(context) }
     val soundManager = remember { SoundManager(context) }
+    val musicManager = remember { MusicManager(context) }
     DisposableEffect(Unit) {
-        onDispose { soundManager.release() }
+        onDispose {
+            soundManager.release()
+            musicManager.release()
+        }
     }
     val savedProgress by progressStore.progress.collectAsState(
         initial = GameProgress(highestLevel = 1, score = 0, themeId = 1, soundEnabled = true)
@@ -138,6 +143,16 @@ fun GameApp() {
     // Keep SoundManager in sync with the persisted preference.
     LaunchedEffect(savedProgress.soundEnabled) {
         soundManager.soundEnabled = savedProgress.soundEnabled
+        musicManager.musicEnabled = savedProgress.soundEnabled
+    }
+
+    // Start per-level music whenever the current level or screen changes.
+    LaunchedEffect(currentScreen, gameState.currentLevel) {
+        if (currentScreen == Screen.GAME) {
+            musicManager.startForLevel(gameState.currentLevel)
+        } else {
+            musicManager.stop()
+        }
     }
 
     val coroutineScope = rememberCoroutineScope()
@@ -154,7 +169,9 @@ fun GameApp() {
     }
     var gameState by remember { mutableStateOf(engine.state) }
     var currentScreen by remember { mutableStateOf(Screen.LEVEL_SELECT) }
-    val theme = ThemeRegistry.getTheme(gameState.themeId)
+    // Each level gets its own procedural theme (see ThemeRegistry.themeForLevel)
+    // so the 1500+ levels all feel visually distinct.
+    val theme = ThemeRegistry.themeForLevel(gameState.currentLevel)
 
     fun persistCurrentProgress() {
         coroutineScope.launch {
@@ -332,7 +349,11 @@ fun LevelSelectScreen(
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                val maxDisplay = (highestLevel + 20).coerceAtMost(500)
+                // Show a window of levels around the player's progress so the
+                // grid stays responsive even with 1500+ total levels. We always
+                // include level 1 and the next 20 unlocked levels, plus a small
+                // buffer ahead.
+                val maxDisplay = (highestLevel + 20).coerceAtMost(2000)
                 items((1..maxDisplay).toList()) { level ->
                     val isUnlocked = level <= highestLevel
                     LevelButton(
@@ -480,60 +501,60 @@ fun GamePlayScreen(
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(Brush.verticalGradient(theme.backgroundColors))
+            .background(Color.White)
     ) {
-        // Parallax background layers
-        ParallaxBackground(theme = theme)
-
-        // Ambient animation overlay (birds / bubbles / etc.)
-        AmbientAnimation(animation = theme.ambientAnimation)
-
         Column(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(16.dp)
         ) {
-            // Top bar
-            Row(
+            // Top header bar — blue background, back button, "Level N" pill, settings button.
+            Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(bottom = 8.dp),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
+                    .background(Color(0xFF2196F3))
             ) {
-                TextButton(onClick = onBack) {
-                    Text("← Back", color = Color.White)
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 12.dp, vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    IconButton(onClick = onBack) {
+                        Text("←", fontSize = 24.sp, color = Color.White, fontWeight = FontWeight.Bold)
+                    }
+                    Spacer(modifier = Modifier.weight(1f))
+                    Box(
+                        modifier = Modifier
+                            .background(Color(0xFF42A5F5), RoundedCornerShape(50))
+                            .padding(horizontal = 24.dp, vertical = 8.dp)
+                    ) {
+                        Text(
+                            text = "Level ${gameState.currentLevel}",
+                            color = Color.White,
+                            fontSize = 18.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+                    Spacer(modifier = Modifier.weight(1f))
+                    IconButton(onClick = onToggleSound) {
+                        Text(
+                            text = if (soundManager.soundEnabled) "🔊" else "🔇",
+                            fontSize = 20.sp
+                        )
+                    }
                 }
-
-                Text(
-                    text = "Level ${gameState.currentLevel}",
-                    fontSize = 20.sp,
-                    fontWeight = FontWeight.Bold,
-                    color = Color.White
-                )
-
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    SoundToggleButton(
-                        soundEnabled = soundManager.soundEnabled,
-                        onClick = onToggleSound
-                    )
-                    Spacer(modifier = Modifier.width(8.dp))
+                // Hearts row at the bottom of the header
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(bottom = 6.dp),
+                    horizontalArrangement = Arrangement.Center
+                ) {
                     HeartRow(lives = gameState.lives, animMap = heartAnim)
                 }
             }
 
-            // Score
-            Text(
-                text = "Score: ${gameState.score}",
-                fontSize = 14.sp,
-                color = Color.White.copy(alpha = 0.7f),
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(bottom = 12.dp),
-                textAlign = TextAlign.Center
-            )
-
-            // Maze grid
+            // Maze grid area — white background.
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -581,7 +602,7 @@ fun GamePlayScreen(
                                     shaking.remove(Pair(row, col))
                                 }
                                 // Pop/fade the just-lost heart (lives already decremented).
-                                val lostIndex = gameState.lives // lives is now e.g. 2 -> lost the 2nd heart (index 2)
+                                val lostIndex = gameState.lives
                                 val heartAnimFor = Animatable(0f)
                                 heartAnim[lostIndex] = heartAnimFor
                                 scope.launch {
@@ -594,7 +615,6 @@ fun GamePlayScreen(
                                 }
                             }
                             is MoveResult.GameOver -> {
-                                // "Out of lives" briefly, then board is reset by engine.
                                 for (i in 0 until 3) {
                                     val a = Animatable(0f)
                                     heartAnim[i] = a
@@ -612,43 +632,49 @@ fun GamePlayScreen(
                 )
             }
 
-            // Instruction + hint button
-            Row(
+            // Bottom footer — blue background with diagonal top edge, "Arrows Escape" title.
+            Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(top = 16.dp),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
+                    .height(120.dp)
             ) {
-                Text(
-                    text = "Tap arrows whose path to the edge is clear",
-                    fontSize = 14.sp,
-                    color = Color.White.copy(alpha = 0.6f),
-                    modifier = Modifier.weight(1f)
-                )
-                val canHint = gameState.hintsRemaining > 0 && !gameState.isLevelComplete && !gameState.isGameOver
-                TextButton(
-                    onClick = {
-                        soundManager.playButtonTap()
-                        val target = engine.useHint()
-                        if (target != null) {
-                            onEngineStateChanged()
-                            hintCell = target
-                            scope.launch {
-                                hintPulse.snapTo(0f)
-                                hintPulse.animateTo(
-                                    targetValue = 1f,
-                                    animationSpec = tween(durationMillis = 1500)
-                                )
-                                hintCell = null
-                            }
-                        }
-                    },
-                    enabled = canHint
+                // Diagonal blue shape at the top of the footer.
+                androidx.compose.foundation.Canvas(modifier = Modifier.fillMaxSize()) {
+                    val w = size.width
+                    val h = size.height
+                    val path = androidx.compose.ui.graphics.Path().apply {
+                        moveTo(0f, 40f)
+                        lineTo(w, 0f)
+                        lineTo(w, h)
+                        lineTo(0f, h)
+                        close()
+                    }
+                    drawPath(path, Color(0xFF2196F3))
+                }
+                Column(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(top = 24.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.Center
                 ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text("→", color = Color.White, fontSize = 22.sp, fontWeight = FontWeight.Bold)
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = "Arrows Escape",
+                            color = Color.White,
+                            fontSize = 24.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text("←", color = Color.White, fontSize = 22.sp, fontWeight = FontWeight.Bold)
+                    }
+                    Spacer(modifier = Modifier.height(4.dp))
                     Text(
-                        text = "💡 Hint (${gameState.hintsRemaining})",
-                        color = if (canHint) Color.White else Color.White.copy(alpha = 0.4f)
+                        text = "Score: ${gameState.score}",
+                        color = Color.White.copy(alpha = 0.9f),
+                        fontSize = 13.sp
                     )
                 }
             }
@@ -697,12 +723,15 @@ fun MazeGrid(
     onCellTapped: (Int, Int) -> Unit
 ) {
     val gridSize = maze.gridSize
-    val cellSize = (320 / gridSize).dp.coerceAtMost(64.dp)
+    // Scale cell size to fill the available width while staying tappable.
     val density = androidx.compose.ui.platform.LocalDensity.current
-    val cellSizePx = with(density) { cellSize.toPx() }
+    val maxBoardPx = with(density) { 320.dp.toPx() }
+    val cellSize = (maxBoardPx / gridSize).dp.coerceAtMost(64.dp)
 
     Column(
-        horizontalAlignment = Alignment.CenterHorizontally
+        horizontalAlignment = Alignment.CenterHorizontally,
+        modifier = Modifier
+            .background(Color.White)
     ) {
         for (row in 0 until gridSize) {
             Row(horizontalArrangement = Arrangement.Center) {
@@ -716,13 +745,9 @@ fun MazeGrid(
                     Box(
                         modifier = Modifier
                             .size(cellSize)
-                            .padding(2.dp)
-                            .clip(RoundedCornerShape(4.dp))
-                            .background(Color.White.copy(alpha = 0.10f))
                             .border(
                                 width = 0.5.dp,
-                                color = Color.White.copy(alpha = 0.20f),
-                                shape = RoundedCornerShape(4.dp)
+                                color = Color(0xFFCCCCCC),
                             )
                             .clickable(enabled = hasArrow) { onCellTapped(row, col) },
                         contentAlignment = Alignment.Center
