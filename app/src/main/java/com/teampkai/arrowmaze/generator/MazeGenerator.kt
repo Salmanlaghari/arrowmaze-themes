@@ -43,30 +43,74 @@ data class MazeResult(
 
 object MazeGenerator {
 
+    /** Minimum number of arrows a valid board must contain. */
+    private const val MIN_ARROWS = 3
+
     fun generate(level: Int, seed: Long = System.currentTimeMillis()): MazeResult {
-        val rng = Random(seed)
         val gridSize = calculateGridSize(level)
         val arrowCount = calculateArrowCount(level, gridSize)
 
-        val result = generateArrowsEscape(gridSize, arrowCount, rng)
-        return result
+        // Try a few seeds if the first attempt yields too few arrows. The
+        // backwards-construction algorithm is capacity-limited (especially on
+        // small grids) and can produce a very sparse board with a bad seed.
+        // Retrying with different seeds gives a high probability of hitting
+        // the target while still being deterministic per (level, seed) pair.
+        var currentSeed = seed
+        repeat(5) {
+            val rng = Random(currentSeed)
+            val result = generateArrowsEscape(gridSize, arrowCount, rng)
+            if (result.grid.flatten().count { it.hasArrow } >= MIN_ARROWS) {
+                return result
+            }
+            currentSeed = currentSeed * 6364136223846793005L + 1442695040888963407L
+        }
+
+        // Fallback: if every attempt produced an empty/sparse board, return
+        // the last result anyway. The hard iteration cap in
+        // generateArrowsEscape guarantees this can never hang.
+        val rng = Random(currentSeed)
+        return generateArrowsEscape(gridSize, arrowCount, rng)
     }
 
     fun calculateGridSize(level: Int): Int {
-        // 4x4 at level 1, growing slowly. Cap at 9 to keep cells tappable.
-        return (4 + (level / 80).toInt()).coerceIn(4, 9)
+        // 5×5 at level 1, growing slowly. Cap at 9 to keep cells tappable.
+        // Level 1 is intentionally 5×5 (not 4×4) because the backwards-
+        // construction algorithm has a hard capacity of ~8 arrows on a 4×4
+        // grid, which made the board look nearly empty. 5×5 gives the
+        // algorithm room to place 6–8 arrows reliably.
+        return (5 + ((level - 1) / 60).toInt()).coerceIn(5, 9)
     }
 
     fun calculateArrowCount(level: Int, gridSize: Int): Int {
-        // Roughly 15..20 at level 1, growing toward 60..100+ at high levels.
-        // The hard cap is gridSize*gridSize minus 2 (keep a couple of empty cells).
-        val base = 15
+        // The backwards-construction algorithm has a hard capacity that depends
+        // on grid size: each placed arrow claims a path of 1..(gridSize-1) cells
+        // that no later arrow can reuse. We cap `arrowCount` to a value the
+        // generator can actually achieve, and we scale the cap with grid size
+        // so the difficulty curve still feels right at higher levels.
+        val base = 6
         val growth = level.toFloat() / 18f
-        val cap = (gridSize * gridSize) - 2
+        val cap = maxArrowCapacity(gridSize)
         // Use coerceAtMost first, then coerceAtLeast — coerceIn throws when
-        // minimumValue > maximumValue, which happens on small grids (4×4) where
-        // cap (14) is less than base (15).
+        // minimumValue > maximumValue.
         return (base + growth.toInt()).coerceAtMost(cap).coerceAtLeast(1)
+    }
+
+    /**
+     * Maximum number of arrows the backwards-construction algorithm can place
+     * for a given grid size. Empirically, on 4×4 the algorithm places at most
+     * ~7 arrows; on 9×9 up to ~20. This is well below `gridSize*gridSize` and
+     * is the true hard cap for this algorithm.
+     */
+    fun maxArrowCapacity(gridSize: Int): Int {
+        return when (gridSize) {
+            4 -> 6
+            5 -> 8
+            6 -> 11
+            7 -> 14
+            8 -> 17
+            9 -> 20
+            else -> ((gridSize * 2) + 2).coerceAtMost(gridSize * gridSize - 2)
+        }
     }
 
     /**
