@@ -276,8 +276,13 @@ fun LevelSelectScreen(
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(Brush.verticalGradient(theme.backgroundColors))
     ) {
+        // Use the Jungle background as the level-select backdrop so the
+        // menu feels alive (live particles + scenery).
+        AnimatedBackground(
+            type = BackgroundCatalog.forLevel(1),
+            theme = theme
+        )
         Column(
             modifier = Modifier
                 .fillMaxSize()
@@ -554,13 +559,18 @@ fun GamePlayScreen(
                 }
             }
 
-            // Maze grid area — white background.
+            // Maze grid area — premium animated background visible around the white grid.
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
                     .weight(1f),
                 contentAlignment = Alignment.Center
             ) {
+                // Per-level live-animated background (50+ unique scenes).
+                AnimatedBackground(
+                    type = BackgroundCatalog.forLevel(gameState.currentLevel),
+                    theme = theme
+                )
                 MazeGrid(
                     maze = maze,
                     theme = theme,
