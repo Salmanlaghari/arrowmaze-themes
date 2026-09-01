@@ -354,12 +354,11 @@ fun LevelSelectScreen(
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                // Show a window of levels around the player's progress so the
-                // grid stays responsive even with 1500+ total levels. We always
-                // include level 1 and the next 20 unlocked levels, plus a small
-                // buffer ahead.
-                val maxDisplay = (highestLevel + 20).coerceAtMost(2000)
-                items((1..maxDisplay).toList()) { level ->
+                // Show all 1500+ levels. LazyVerticalGrid is virtualized so
+                // rendering 1500 items is efficient; locked levels are shown
+                // greyed-out so the player can see the full game scope.
+                val totalLevels = 1500
+                items((1..totalLevels).toList()) { level ->
                     val isUnlocked = level <= highestLevel
                     LevelButton(
                         level = level,
