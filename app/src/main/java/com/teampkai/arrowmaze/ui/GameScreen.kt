@@ -732,10 +732,11 @@ fun MazeGrid(
     onCellTapped: (Int, Int) -> Unit
 ) {
     val gridSize = maze.gridSize
-    // Scale cell size to fill the available width while staying tappable.
-    val density = androidx.compose.ui.platform.LocalDensity.current
-    val maxBoardPx = with(density) { 320.dp.toPx() }
-    val cellSize = (maxBoardPx / gridSize).dp.coerceAtMost(64.dp)
+    // Scale the board to fill the available screen width so the arrows form
+    // a large, connected pipe-network matching the reference. Cap cell size
+    // so the board doesn't get absurdly large on tablets.
+    val maxBoardDp = 360.dp
+    val cellSize = (maxBoardDp / gridSize).coerceAtMost(56.dp)
 
     Column(
         horizontalAlignment = Alignment.CenterHorizontally,
@@ -754,10 +755,6 @@ fun MazeGrid(
                     Box(
                         modifier = Modifier
                             .size(cellSize)
-                            .border(
-                                width = 0.5.dp,
-                                color = Color(0xFFCCCCCC),
-                            )
                             .clickable(enabled = hasArrow) { onCellTapped(row, col) },
                         contentAlignment = Alignment.Center
                     ) {

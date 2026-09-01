@@ -42,8 +42,9 @@ fun ArrowRenderer(
         val h = size.height
         val cx = w / 2f
         val cy = h / 2f
-        // The arrow line spans almost the full cell, leaving a small margin.
-        val halfLen = (minOf(w, h) / 2f) * 0.42f
+        // The shaft spans the full cell edge-to-edge so adjacent arrows
+        // visually connect into continuous "pipes" matching the reference.
+        val halfLen = (minOf(w, h) / 2f) * 0.95f
         val stroke = (minOf(w, h) * 0.10f).coerceAtLeast(2.5f)
 
         val rotationAngle = when (direction) {
@@ -54,7 +55,7 @@ fun ArrowRenderer(
         }
 
         rotate(degrees = rotationAngle, pivot = Offset(cx, cy)) {
-            // Main shaft: a thin black line from tail to tip.
+            // Main shaft: a thin black line from one cell edge to the other.
             drawLine(
                 color = lineColor,
                 start = Offset(cx - halfLen, cy),
@@ -62,9 +63,9 @@ fun ArrowRenderer(
                 strokeWidth = stroke,
                 cap = Stroke.DefaultCap
             )
-            // Arrowhead: two short strokes forming a V at the tip.
-            val headLen = halfLen * 0.42f
-            val headSpread = headLen * 0.62f
+            // Arrowhead: two short strokes forming a V near the tip end.
+            val headLen = halfLen * 0.20f
+            val headSpread = headLen * 0.85f
             val tipX = cx + halfLen
             drawLine(
                 color = lineColor,
@@ -79,12 +80,6 @@ fun ArrowRenderer(
                 end = Offset(tipX - headLen, cy + headSpread),
                 strokeWidth = stroke,
                 cap = Stroke.DefaultCap
-            )
-            // Small accent dot at the tail for a touch of theme color.
-            drawCircle(
-                color = accentColor,
-                radius = stroke * 0.55f,
-                center = Offset(cx - halfLen, cy)
             )
         }
     }
