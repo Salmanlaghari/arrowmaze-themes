@@ -237,12 +237,15 @@ object MazeGenerator {
                 }
             if (options.isEmpty()) break
 
-            val chosen = if (arrival == null) {
+            // Snapshot into an immutable local — Kotlin can't smart-cast the
+            // mutable `arrival` var inside the capturing lambda below.
+            val lastArrival = arrival
+            val chosen = if (lastArrival == null) {
                 options[rng.nextInt(options.size)]
             } else {
                 // Weight: turning 3×, continuing straight 1× → winding feel.
                 val weighted = options.flatMap { (d, n) ->
-                    if (d == arrival.opposite() || d == arrival) listOf(d to n) else listOf(d to n, d to n, d to n)
+                    if (d == lastArrival.opposite() || d == lastArrival) listOf(d to n) else listOf(d to n, d to n, d to n)
                 }
                 weighted[rng.nextInt(weighted.size)]
             }
