@@ -1,239 +1,287 @@
 package com.teampkai.arrowmaze.generator
 
+import kotlin.math.roundToInt
 import kotlin.random.Random
 
 enum class Direction { UP, DOWN, LEFT, RIGHT }
 
+fun Direction.opposite(): Direction = when (this) {
+    Direction.UP -> Direction.DOWN
+    Direction.DOWN -> Direction.UP
+    Direction.LEFT -> Direction.RIGHT
+    Direction.RIGHT -> Direction.LEFT
+}
+
 /**
- * A single cell in the puzzle grid. The cell may or may not currently hold an arrow
- * (in the new "clear the board" mechanic every cell can hold an arrow, but some
- * may be empty in early levels for visual variety).
+ * A single grid cell (kept for backward compatibility with legacy consumers
+ * and as a fast occupancy lookup).
  */
 data class ArrowCell(
     val row: Int,
     val col: Int,
+    /** Direction of the path segment leaving this cell toward the head. */
     val direction: Direction,
-    /**
-     * Whether this cell currently contains an arrow that has not yet been cleared.
-     * Cleared cells become empty (hasArrow = false) and are still drawn (as an
-     * empty cell) but cannot be tapped.
-     */
     val hasArrow: Boolean
 )
 
 /**
- * Result of generating a single level.
+ * One continuous, winding arrow line on the board.
  *
- * `generationOrder` records the order in which arrows were placed during the
- * backwards-construction pass. It is *one* valid clearing order (reverse of
- * placement) and is used as a hint source and for level validation. The player
- * is free to clear arrows in any valid order; the runtime game state recomputes
- * "is this arrow's path currently clear" live against the current remaining set.
+ * A path is an ordered chain of cells from its [tail] to its [head], bending
+ * through the grid, with an [exitDirection] arrowhead at the head. Tapping any
+ * cell of the path attempts to slide the WHOLE line out of the board along
+ * [exitDirection]; it succeeds only if every cell of [corridorCells] (the
+ * straight run from the head to the board edge) is free of other paths.
+ */
+data class ArrowPath(
+    val id: Int,
+    /** Cells of the line in order: tail (start) → head (arrowhead). */
+    val cells: List<Pair<Int, Int>>,
+    /** Direction the arrowhead points (also the slide-out direction). */
+    val exitDirection: Direction,
+    /** Straight cells from head+1 to the board edge along [exitDirection]. */
+    val corridorCells: List<Pair<Int, Int>>
+) {
+    val head: Pair<Int, Int> get() = cells.last()
+    val tail: Pair<Int, Int> get() = cells.first()
+}
+
+/**
+ * Result of generating a single level: a dense field of interlocking winding
+ * paths plus lookup indexes used by the engine and renderer.
  */
 data class MazeResult(
     val gridSize: Int,
     val grid: List<List<ArrowCell>>,
     /**
-     * The reference solution: a list of (row, col) cells that hold arrows, in
-     * the order in which the generator placed them. Reversed, this is one valid
-     * clearing order.
+     * Head cells of the paths in placement order. Reversed, this is one valid
+     * clearing order (the reverse-solve guarantee below).
      */
-    val generationOrder: List<Pair<Int, Int>>
-)
+    val generationOrder: List<Pair<Int, Int>>,
+    val paths: List<ArrowPath>,
+    /** cell → path id for every occupied cell. */
+    val cellToPathId: Map<Pair<Int, Int>, Int>
+) {
+    val pathsById: Map<Int, ArrowPath> get() = paths.associateBy { it.id }
+}
 
 object MazeGenerator {
 
-    /** Minimum number of arrows a valid board must contain. */
-    private const val MIN_ARROWS = 3
+    /** Minimum number of paths a valid board must contain. */
+    private const val MIN_PATHS = 4
 
     fun generate(level: Int, seed: Long = System.currentTimeMillis()): MazeResult {
         val gridSize = calculateGridSize(level)
-        val arrowCount = calculateArrowCount(level, gridSize)
+        val targetPaths = calculatePathCount(level, gridSize)
 
-        // Try a few seeds if the first attempt yields too few arrows. The
-        // backwards-construction algorithm is capacity-limited (especially on
-        // small grids) and can produce a very sparse board with a bad seed.
-        // Retrying with different seeds gives a high probability of hitting
-        // the target while still being deterministic per (level, seed) pair.
+        // Retry a few seeds if an attempt comes out too sparse; the placement
+        // loop is bounded so this can never hang.
         var currentSeed = seed
-        repeat(5) {
+        repeat(6) {
             val rng = Random(currentSeed)
-            val result = generateArrowsEscape(gridSize, arrowCount, rng)
-            if (result.grid.flatten().count { it.hasArrow } >= MIN_ARROWS) {
-                return result
-            }
+            val result = generateWindingMaze(gridSize, targetPaths, rng)
+            if (result.paths.size >= MIN_PATHS) return result
             currentSeed = currentSeed * 6364136223846793005L + 1442695040888963407L
         }
-
-        // Fallback: if every attempt produced an empty/sparse board, return
-        // the last result anyway. The hard iteration cap in
-        // generateArrowsEscape guarantees this can never hang.
-        val rng = Random(currentSeed)
-        return generateArrowsEscape(gridSize, arrowCount, rng)
+        return generateWindingMaze(gridSize, targetPaths, Random(currentSeed))
     }
 
+    /**
+     * Spec curve: Level 1 = 8×8, Level 10 = 15×15, Level 50 = 25×25, then +1
+     * every 10 levels (capped so cells stay tappable).
+     */
     fun calculateGridSize(level: Int): Int {
-        // 5×5 at level 1, growing by 1 every 100 levels. Cap at 9 to keep
-        // cells tappable. With 1500+ levels this gives:
-        //   L1–100: 5×5, L101–200: 6×6, L201–300: 7×7, L301–400: 8×8, L401+: 9×9.
-        return (5 + ((level - 1) / 100).toInt()).coerceIn(5, 9)
-    }
-
-    fun calculateArrowCount(level: Int, gridSize: Int): Int {
-        // Smooth 1–2 difficulty increment per level:
-        //   - Start at 6 arrows (easy on 5×5)
-        //   - Grow by 1 arrow every 8 levels, so each level adds ~1 arrow
-        //   - Cap at the algorithm's real capacity for this grid size
-        val base = 6
-        val growth = level / 8
-        val cap = maxArrowCapacity(gridSize)
-        return (base + growth).coerceAtMost(cap).coerceAtLeast(1)
-    }
-
-    /**
-     * Maximum number of arrows the backwards-construction algorithm can place
-     * for a given grid size. Empirically, on 5×5 the algorithm places up to
-     * ~8 arrows; on 9×9 up to ~20. This is the true hard cap for this
-     * algorithm (well below gridSize*gridSize).
-     */
-    fun maxArrowCapacity(gridSize: Int): Int {
-        return when (gridSize) {
-            5 -> 10
-            6 -> 13
-            7 -> 16
-            8 -> 18
-            9 -> 20
-            else -> ((gridSize * 2) + 4).coerceAtMost(gridSize * gridSize - 2)
+        val g = when {
+            level <= 10 -> 8 + ((level - 1) * 7) / 9      // 8 → 15
+            level <= 50 -> 15 + ((level - 10) * 10) / 40  // 15 → 25
+            else -> 25 + (level - 50) / 10
         }
+        return g.coerceIn(8, 34)
+    }
+
+    /** Target number of winding paths so the board reads dense but fair. */
+    fun calculatePathCount(level: Int, gridSize: Int): Int {
+        val base = (gridSize * gridSize) / 8 + level / 16
+        val maxDensity = ((gridSize * gridSize) * 0.5f / 3.5f).toInt()
+        return base.coerceIn(6, maxDensity.coerceAtLeast(6))
     }
 
     /**
-     * Backwards-construction algorithm for the "Arrows Escape" mechanic:
+     * Reverse-solving generator for winding multi-segment paths.
      *
-     *   1. Start with an empty grid and a "remaining" set containing every cell.
-     *   2. Repeatedly pick a random cell from `remaining` and a random grid edge
-     *      it can point toward such that the *path* from that cell to that edge
-     *      (moving in the chosen direction, one cell at a time) only traverses
-     *      cells that are STILL in `remaining` (i.e. not yet placed).
-     *   3. Place an arrow at that cell pointing in that direction, remove the
-     *      path cells from `remaining` (they are now "blocked" until this arrow
-     *      is removed), and record the placement order in `generationOrder`.
-     *   4. Stop when `remaining` is empty or we hit the target arrow count.
+     * Paths are placed one at a time; each placement claims:
+     *   - its BODY (the winding line cells), and
+     *   - requires its CORRIDOR (the straight run from head to the nearest
+     *     edge along the arrowhead direction) to be free of all previously
+     *     placed bodies.
      *
-     * Because each placed arrow claims a path that no future placement can use,
-     * the reverse of `generationOrder` is a guaranteed-valid clearing sequence:
-     * the most-recently-placed arrow's path is fully clear (its claimed cells
-     * were not used by anything placed after it), so it can be removed; and so on.
+     * Later paths may not cross earlier corridors, but they MAY park their
+     * bodies inside them — that's exactly the interlock: the later path blocks
+     * the earlier one until it is removed. Clearing in reverse placement order
+     * is therefore always valid (when path i is cleared, only bodies 1..i-1
+     * remain, and corridor_i was verified clear against exactly those), giving
+     * 100% solvability with no deadlocks — and the player can also find other
+     * valid orders, with illegal taps shaking + flashing red.
      */
-    private fun generateArrowsEscape(
+    private fun generateWindingMaze(
         gridSize: Int,
-        arrowCount: Int,
+        targetPaths: Int,
         rng: Random
     ): MazeResult {
-        val totalCells = gridSize * gridSize
-        val remaining = mutableSetOf<Pair<Int, Int>>()
-        for (r in 0 until gridSize) for (c in 0 until gridSize) remaining.add(Pair(r, c))
-
-        // direction[cell] = the arrow direction that was placed there (or null if empty)
-        val direction = mutableMapOf<Pair<Int, Int>, Direction>()
+        val occupied = HashSet<Pair<Int, Int>>()      // bodies of placed paths
+        val cellToPath = HashMap<Pair<Int, Int>, Int>()
+        val paths = mutableListOf<ArrowPath>()
         val generationOrder = mutableListOf<Pair<Int, Int>>()
         val allDirs = Direction.entries
 
+        val maxBody = 4 + gridSize / 3
         var attempts = 0
-        val maxAttempts = arrowCount * 80
+        val maxAttempts = targetPaths * 90
 
-        while (generationOrder.size < arrowCount && remaining.isNotEmpty() && attempts < maxAttempts) {
+        while (paths.size < targetPaths && attempts < maxAttempts) {
             attempts++
-            val cell = remaining.random(rng)
-            val row = cell.first
-            val col = cell.second
 
-            // Try each of the 4 edges; for each, see if a straight path to the
-            // edge is fully inside `remaining`.
-            val edges = allDirs.shuffled(rng)
-            var placed = false
-            for (dir in edges) {
-                val path = cellsToEdge(row, col, dir, gridSize)
-                if (path.isEmpty()) continue
-                if (path.all { it in remaining }) {
-                    direction[cell] = dir
-                    generationOrder.add(cell)
-                    // CRITICAL (solvability): remove the arrow's own cell too.
-                    // If it stayed in the pool, a LATER arrow's path could cross
-                    // this cell; the later arrow would then be blocked by this
-                    // one and vice versa — a deadlock where neither can ever
-                    // clear, and hints would report "no moves". Removing the
-                    // cell keeps every placed arrow off every later path, so
-                    // the reverse of generationOrder is always a valid solve.
-                    remaining.remove(cell)
-                    remaining.removeAll(path.toSet())
-                    placed = true
-                    break
-                }
+            // ── 1. Random head + arrowhead direction with a clear corridor ──
+            val head = Pair(rng.nextInt(gridSize), rng.nextInt(gridSize))
+            if (head in occupied) continue
+            val dir = allDirs[rng.nextInt(allDirs.size)]
+            val corridor = corridorOf(head, dir, gridSize)
+            if (corridor.any { it in occupied }) continue
+
+            // ── 2. Wind the body backward from the head ──────────────────
+            val body = buildWindingBody(head, dir, corridor, occupied, gridSize, maxBody, rng)
+                ?: continue
+
+            // ── 3. Commit the path ───────────────────────────────────────
+            val path = ArrowPath(
+                id = paths.size,
+                cells = body.asReversed(),   // store tail → head
+                exitDirection = dir,
+                corridorCells = corridor
+            )
+            for (cell in body) {
+                occupied.add(cell)
+                cellToPath[cell] = path.id
             }
-            // If this cell can't point to any edge (e.g. it's fully surrounded
-            // by already-claimed cells), it stays empty. Drop it from `remaining`
-            // so we don't keep retrying.
-            if (!placed) {
-                remaining.remove(cell)
-            }
+            paths.add(path)
+            generationOrder.add(head)
         }
 
-        // Build the final grid. Every cell gets a direction (for arrow drawing),
-        // and `hasArrow` is true only if this cell actually holds an arrow.
-        // For empty cells we just pick an arbitrary direction so ArrowRenderer
-        // still has something to draw in case the renderer is asked about one
-        // (it shouldn't be — empty cells aren't tappable — but keeps the model
-        // uniform).
+        // Legacy grid view: every path cell "has an arrow"; direction points
+        // along the path toward its head (head cells use the exit direction).
+        val dirByCell = HashMap<Pair<Int, Int>, Direction>()
+        for (path in paths) {
+            for (i in path.cells.indices) {
+                val cell = path.cells[i]
+                dirByCell[cell] = if (i == path.cells.size - 1) {
+                    path.exitDirection
+                } else {
+                    val next = path.cells[i + 1]
+                    directionBetween(cell, next)
+                }
+            }
+        }
         val grid = (0 until gridSize).map { row ->
             (0 until gridSize).map { col ->
                 val pos = Pair(row, col)
-                val dir = direction[pos] ?: allDirs[rng.nextInt(allDirs.size)]
                 ArrowCell(
                     row = row,
                     col = col,
-                    direction = dir,
-                    hasArrow = pos in direction
+                    direction = dirByCell[pos] ?: allDirs[rng.nextInt(allDirs.size)],
+                    hasArrow = dirByCell.containsKey(pos)
                 )
             }
         }
 
-        // Pad generationOrder to "every arrow cell" for backwards compatibility
-        // with anything that might expect length == arrow count, but the engine
-        // doesn't rely on this; the engine recomputes valid moves from the grid.
-        @Suppress("UNUSED_VARIABLE")
-        val _unused = totalCells // (kept for clarity in the algorithm above)
-
         return MazeResult(
             gridSize = gridSize,
             grid = grid,
-            generationOrder = generationOrder
+            generationOrder = generationOrder,
+            paths = paths,
+            cellToPathId = cellToPath
         )
     }
 
     /**
-     * Returns the list of cells from (row,col) (inclusive) stepping in `dir`
-     * until just past the grid edge, or empty if (row,col) is already on that
-     * edge (no cells to traverse, which is technically valid but we treat as
-     * not useful — an arrow on the edge has nowhere to "escape" to).
+     * Grows a winding polyline backward from the head. At every step it
+     * forbids: leaving the grid, revisiting itself, entering the exit
+     * corridor (a line must never cross its own escape path) and entering
+     * cells occupied by other paths. Turns are weighted over straights so
+     * lines bend and weave like maze paths.
      */
-    private fun cellsToEdge(row: Int, col: Int, dir: Direction, gridSize: Int): List<Pair<Int, Int>> {
-        val out = mutableListOf<Pair<Int, Int>>()
-        var r = row
-        var c = col
-        // Must traverse at least one cell beyond the start (otherwise the arrow
-        // is already at the edge and the puzzle is degenerate).
-        var stepped = false
-        while (true) {
-            val nr = r + dr(dir)
-            val nc = c + dc(dir)
-            if (nr !in 0 until gridSize || nc !in 0 until gridSize) break
-            r = nr
-            c = nc
-            out.add(Pair(r, c))
-            stepped = true
+    private fun buildWindingBody(
+        head: Pair<Int, Int>,
+        exitDir: Direction,
+        corridor: List<Pair<Int, Int>>,
+        occupied: Set<Pair<Int, Int>>,
+        gridSize: Int,
+        maxBody: Int,
+        rng: Random
+    ): List<Pair<Int, Int>>? {
+        val corridorSet = corridor.toHashSet()
+        val body = mutableListOf(head)
+        val inBody = hashSetOf(head)
+        var cur = head
+        var arrival: Direction? = null
+        val targetLen = 2 + rng.nextInt((maxBody - 1).coerceAtLeast(1))  // 2..maxBody
+
+        while (body.size < targetLen) {
+            val options = allSteps(cur)
+                .filter { (d, _) -> arrival == null || d != arrival.opposite() }
+                .filter { (_, n) ->
+                    n.first in 0 until gridSize &&
+                        n.second in 0 until gridSize &&
+                        n !in inBody &&
+                        n !in corridorSet &&
+                        n !in occupied
+                }
+            if (options.isEmpty()) break
+
+            // Snapshot into an immutable local — Kotlin can't smart-cast the
+            // mutable `arrival` var inside the capturing lambda below.
+            val lastArrival = arrival
+            val chosen = if (lastArrival == null) {
+                options[rng.nextInt(options.size)]
+            } else {
+                // Weight: turning 3×, continuing straight 1× → winding feel.
+                val weighted = options.flatMap { (d, n) ->
+                    if (d == lastArrival.opposite() || d == lastArrival) listOf(d to n) else listOf(d to n, d to n, d to n)
+                }
+                weighted[rng.nextInt(weighted.size)]
+            }
+            body.add(chosen.second)
+            inBody.add(chosen.second)
+            arrival = chosen.first
+            cur = chosen.second
         }
-        return if (stepped) out else emptyList()
+        return if (body.size >= 2) body else null
+    }
+
+    private fun allSteps(cell: Pair<Int, Int>): List<Pair<Direction, Pair<Int, Int>>> = listOf(
+        Direction.UP to Pair(cell.first - 1, cell.second),
+        Direction.DOWN to Pair(cell.first + 1, cell.second),
+        Direction.LEFT to Pair(cell.first, cell.second - 1),
+        Direction.RIGHT to Pair(cell.first, cell.second + 1)
+    )
+
+    /** Cells strictly after [from] stepping in [dir] until the grid edge. */
+    private fun corridorOf(from: Pair<Int, Int>, dir: Direction, gridSize: Int): List<Pair<Int, Int>> {
+        val out = mutableListOf<Pair<Int, Int>>()
+        var r = from.first + dr(dir)
+        var c = from.second + dc(dir)
+        while (r in 0 until gridSize && c in 0 until gridSize) {
+            out.add(Pair(r, c))
+            r += dr(dir)
+            c += dc(dir)
+        }
+        return out
+    }
+
+    private fun directionBetween(a: Pair<Int, Int>, b: Pair<Int, Int>): Direction = when {
+        b.first < a.first -> Direction.UP
+        b.first > a.first -> Direction.DOWN
+        b.second < a.second -> Direction.LEFT
+        else -> Direction.RIGHT
     }
 
     private fun dr(dir: Direction): Int = when (dir) {

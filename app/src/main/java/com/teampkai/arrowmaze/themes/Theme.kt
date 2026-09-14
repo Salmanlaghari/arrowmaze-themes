@@ -8,6 +8,15 @@ data class Theme(
     val name: String,
     val backgroundColors: List<Color>,
     val arrowPalette: ArrowPalette,
+    /** Seamless canvas behind the maze paths (warm off-white, or dark). */
+    val boardBackground: Color = Color(0xFFF6F1E7),
+    /** Cycling stroke colors for winding paths (theme-tinted variety). */
+    val pathPalette: List<Color> = listOf(
+        arrowPalette.primary,
+        arrowPalette.secondary,
+        arrowPalette.accent,
+        Color(0xFF37474F)
+    ),
     val ambientAnimation: String,
     val parallaxLayers: List<ParallaxLayer>
 )
@@ -85,6 +94,13 @@ object ThemeRegistry {
             accent = Color(0xFFFF00FF),      // hot magenta
             glow = Color(0x8800E5FF)         // translucent cyan glow
         ),
+        boardBackground = Color(0xFF0D0D1F),
+        pathPalette = listOf(
+            Color(0xFF00E5FF),   // neon cyan
+            Color(0xFFFF00FF),   // hot magenta
+            Color(0xFF7C4DFF),   // violet
+            Color(0xFF76FF03)    // acid lime
+        ),
         ambientAnimation = "bubbles",
         parallaxLayers = listOf(
             ParallaxLayer(speed = 0.1f, drawType = "deep_sea"),
@@ -154,6 +170,13 @@ object ThemeRegistry {
                 secondary = secondary,
                 accent = accent,
                 glow = glow
+            ),
+            boardBackground = if (tier % 2 == 0) Color(0xFFF6F1E7) else Color(0xFF101320),
+            pathPalette = listOf(
+                primary,
+                accent,
+                secondary,
+                hslToColor((hue + 180f) % 360f, seed.saturation, (seed.lightness * 0.9f).coerceAtMost(0.65f))
             ),
             ambientAnimation = if (level % 2 == 0) "birds" else "bubbles",
             parallaxLayers = listOf(

@@ -13,6 +13,7 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
@@ -25,14 +26,22 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.PathEffect
+import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.DrawScope
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -44,7 +53,7 @@ import com.teampkai.arrowmaze.core.GameState
 import com.teampkai.arrowmaze.core.MoveResult
 import com.teampkai.arrowmaze.data.GameProgress
 import com.teampkai.arrowmaze.data.GameProgressStore
-import com.teampkai.arrowmaze.generator.ArrowCell
+import com.teampkai.arrowmaze.generator.ArrowPath
 import com.teampkai.arrowmaze.generator.Direction
 import com.teampkai.arrowmaze.generator.MazeResult
 import com.teampkai.arrowmaze.themes.Theme
@@ -532,12 +541,12 @@ fun GamePlayScreen(
 
     val headerColor = theme.arrowPalette.secondary.copy(alpha = 0.92f)
 
-    // Cells currently animating their slide-out. Once the animation finishes
-    // they're removed from the set; the engine has already removed them from
-    // the "remaining" set, so the cell will simply not be re-rendered.
-    val slidingOut = remember { mutableStateMapOf<Pair<Int, Int>, Animatable<Float, *>>() }
-    // Cells currently shaking (after a Blocked result).
-    val shaking = remember { mutableStateMapOf<Pair<Int, Int>, Animatable<Float, *>>() }
+    // Paths currently animating their rope-pull slide-out, keyed by path id.
+    // When the animation finishes the path has already been removed from the
+    // engine's remaining set, so it simply stops being rendered.
+    val slidingOut = remember { mutableStateMapOf<Int, Animatable<Float, *>>() }
+    // Paths currently shaking + flashing red (after a Blocked result).
+    val shaking = remember { mutableStateMapOf<Int, Animatable<Float, *>>() }
     // Animation start time for each lost heart (for pop/fade on lose).
     val heartAnim = remember { mutableStateMapOf<Int, Animatable<Float, *>>() }
     // Currently-hinted cell (if any) and a 0..1 progress for its pulse.
@@ -600,6 +609,31 @@ fun GamePlayScreen(
                         }
                     }
                     Spacer(modifier = Modifier.weight(1f))
+                    // Hint booster: highlights one currently-clearable path
+                    // (pulsing glow on the canvas) and consumes one of 3 hints.
+                    IconButton(
+                        onClick = {
+                            if (gameState.hintsRemaining > 0) {
+                                val target = engine.useHint()
+                                if (target != null) {
+                                    hintCell = target
+                                    soundManager.playButtonTap()
+                                    scope.launch {
+                                        hintPulse.snapTo(0f)
+                                        hintPulse.animateTo(
+                                            1f,
+                                            tween(durationMillis = 2400, easing = LinearEasing)
+                                        )
+                                        if (hintCell == target) hintCell = null
+                                        hintPulse.snapTo(0f)
+                                    }
+                                }
+                            }
+                        },
+                        modifier = Modifier.alpha(if (gameState.hintsRemaining > 0) 1f else 0.35f)
+                    ) {
+                        Text(text = "💡", fontSize = 20.sp)
+                    }
                     IconButton(onClick = onToggleSound) {
                         Text(
                             text = if (soundManager.soundEnabled) "🔊" else "🔇",
@@ -630,15 +664,15 @@ fun GamePlayScreen(
                     type = BackgroundCatalog.forLevel(gameState.currentLevel),
                     theme = theme
                 )
-                MazeGrid(
+                MazeCanvas(
                     maze = maze,
                     theme = theme,
-                    clearedCells = gameState.clearedCells,
+                    clearedPathIds = gameState.clearedPathIds,
                     slidingOut = slidingOut,
                     shaking = shaking,
-                    hintCell = hintCell,
+                    hintPath = hintCell?.let { maze.cellToPathId[it] },
                     hintPulseProgress = if (hintCell != null) hintPulse.value else 0f,
-                    onCellTapped = { row, col ->
+                    onPathTapped = { pathId, row, col ->
                         // If the player taps while a hint is showing, clear it.
                         if (hintCell != null) {
                             hintCell = null
@@ -649,28 +683,31 @@ fun GamePlayScreen(
                             is MoveResult.ArrowCleared -> {
                                 // Light haptic tick on every successful exit.
                                 haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                                // Start slide-out animation; keep cell rendered
-                                // until animation completes, then it disappears.
+                                // Rope-pull: the whole winding line slides out along its
+                                // exit direction until it's fully off the board.
                                 val anim = Animatable(0f)
-                                slidingOut[Pair(row, col)] = anim
+                                slidingOut[result.pathId] = anim
                                 scope.launch {
                                     anim.animateTo(
                                         targetValue = 1f,
-                                        animationSpec = tween(durationMillis = 350, easing = LinearEasing)
+                                        animationSpec = tween(
+                                            durationMillis = 480,
+                                            easing = androidx.compose.animation.core.FastOutLinearInEasing
+                                        )
                                     )
-                                    slidingOut.remove(Pair(row, col))
+                                    slidingOut.remove(result.pathId)
                                 }
                             }
                             is MoveResult.Blocked -> {
-                                // Start shake animation.
+                                // Shake + red flash, then the line stays in place.
                                 val anim = Animatable(0f)
-                                shaking[Pair(row, col)] = anim
+                                shaking[result.pathId] = anim
                                 scope.launch {
                                     anim.animateTo(
                                         targetValue = 1f,
-                                        animationSpec = tween(durationMillis = 220, easing = LinearEasing)
+                                        animationSpec = tween(durationMillis = 380, easing = LinearEasing)
                                     )
-                                    shaking.remove(Pair(row, col))
+                                    shaking.remove(result.pathId)
                                 }
                                 // Pop/fade the just-lost heart. The engine has already
                                 // decremented lives (3->2 on the first miss), so the heart
@@ -794,136 +831,159 @@ private fun HeartRow(
     }
 }
 
+/**
+ * Seamless maze canvas — the board is one continuous surface (no cell boxes).
+ * Every winding path is drawn as a smooth rounded polyline with an arrowhead;
+ * taps are hit-tested against path cells. The whole line rope-pulls out along
+ * its exit direction when cleared, and shakes with a red flash when blocked.
+ */
 @Composable
-fun MazeGrid(
+fun MazeCanvas(
     maze: MazeResult,
     theme: Theme,
-    clearedCells: Set<Pair<Int, Int>>,
-    slidingOut: SnapshotStateMap<Pair<Int, Int>, Animatable<Float, *>>,
-    shaking: SnapshotStateMap<Pair<Int, Int>, Animatable<Float, *>>,
-    hintCell: Pair<Int, Int>?,
+    clearedPathIds: Set<Int>,
+    slidingOut: SnapshotStateMap<Int, Animatable<Float, *>>,
+    shaking: SnapshotStateMap<Int, Animatable<Float, *>>,
+    hintPath: Int?,
     hintPulseProgress: Float,
-    onCellTapped: (Int, Int) -> Unit
+    onPathTapped: (pathId: Int, row: Int, col: Int) -> Unit
 ) {
-    val gridSize = maze.gridSize
-    // Scale cell size to fill the available width while staying tappable.
-    val density = androidx.compose.ui.platform.LocalDensity.current
-    val maxBoardPx = with(density) { 320.dp.toPx() }
-    val cellSize = (maxBoardPx / gridSize).dp.coerceAtMost(64.dp)
-
-    Column(
-        horizontalAlignment = Alignment.CenterHorizontally,
+    Box(
         modifier = Modifier
-            .background(Color.White)
-    ) {
-        for (row in 0 until gridSize) {
-            Row(horizontalArrangement = Arrangement.Center) {
-                for (col in 0 until gridSize) {
-                    val cell = maze.grid[row][col]
-                    val pos = Pair(row, col)
-                    val isCleared = pos in clearedCells
-                    val hasArrow = cell.hasArrow && !isCleared
-                    val isHinted = hintCell == pos
-
-                    Box(
-                        modifier = Modifier
-                            .size(cellSize)
-                            .border(
-                                width = 0.5.dp,
-                                color = Color(0xFFCCCCCC),
-                            )
-                            .clickable(enabled = hasArrow) { onCellTapped(row, col) },
-                        contentAlignment = Alignment.Center
-                    ) {
-                        // Pulsing hint ring (drawn behind the arrow).
-                        if (isHinted && hasArrow) {
-                            val pulse = (kotlin.math.sin(hintPulseProgress * Math.PI * 4.0) * 0.5 + 0.5).toFloat()
-                            androidx.compose.foundation.Canvas(
-                                modifier = Modifier.fillMaxSize()
-                            ) {
-                                val cx = size.width / 2f
-                                val cy = size.height / 2f
-                                val baseRadius = size.width * 0.32f
-                                val radius = baseRadius + pulse * size.width * 0.18f
-                                val ringColor = theme.arrowPalette.accent.copy(alpha = 0.45f + 0.4f * pulse)
-                                drawCircle(
-                                    color = ringColor,
-                                    radius = radius,
-                                    center = Offset(cx, cy),
-                                    style = androidx.compose.ui.graphics.drawscope.Stroke(
-                                        width = 3f + 3f * pulse
-                                    )
-                                )
-                                drawCircle(
-                                    color = theme.arrowPalette.glow.copy(alpha = 0.5f + 0.3f * pulse),
-                                    radius = radius * 0.7f,
-                                    center = Offset(cx, cy)
-                                )
-                            }
-                        }
-                        if (hasArrow) {
-                            ArrowCellView(
-                                cell = cell,
-                                theme = theme,
-                                cellSize = cellSize,
-                                slideProgress = slidingOut[pos]?.value,
-                                shakeProgress = shaking[pos]?.value,
-                                slideDirection = cell.direction
-                            )
-                        }
+            .fillMaxWidth()
+            .aspectRatio(1f)
+            .clipToBounds()
+            .semantics { contentDescription = "Arrow maze board" }
+            .pointerInput(maze, clearedPathIds) {
+                detectTapGestures { offset ->
+                    val cell = size.width.toFloat() / maze.gridSize
+                    val col = (offset.x / cell).toInt().coerceIn(0, maze.gridSize - 1)
+                    val row = (offset.y / cell).toInt().coerceIn(0, maze.gridSize - 1)
+                    val pathId = maze.cellToPathId[Pair(row, col)]
+                    if (pathId != null && pathId !in clearedPathIds) {
+                        onPathTapped(pathId, row, col)
                     }
                 }
             }
+    ) {
+        androidx.compose.foundation.Canvas(modifier = Modifier.matchParentSize()) {
+            drawMazeBoard(maze, theme, clearedPathIds, slidingOut, shaking, hintPath, hintPulseProgress)
         }
     }
 }
 
-@Composable
-private fun ArrowCellView(
-    cell: ArrowCell,
+private fun DrawScope.drawMazeBoard(
+    maze: MazeResult,
     theme: Theme,
-    cellSize: androidx.compose.ui.unit.Dp,
-    slideProgress: Float?,
-    shakeProgress: Float?,
-    slideDirection: Direction
+    clearedPathIds: Set<Int>,
+    slidingOut: SnapshotStateMap<Int, Animatable<Float, *>>,
+    shaking: SnapshotStateMap<Int, Animatable<Float, *>>,
+    hintPath: Int?,
+    hintPulseProgress: Float
 ) {
-    val slide = slideProgress ?: 0f
-    val shake = shakeProgress ?: 0f
+    val side = kotlin.math.min(size.width, size.height)
+    val cell = side / maze.gridSize
+    val originX = (size.width - side) / 2f
+    val originY = (size.height - side) / 2f
 
-    // Convert slide offset (Dp) to pixels once, since graphicsLayer works in px.
-    val density = androidx.compose.ui.platform.LocalDensity.current
-    val slideOffsetPx = with(density) { (cellSize * slide).toPx() }
-    val shakeOffsetPx = (kotlin.math.sin(shake * Math.PI * 6.0) * 6.0).toFloat()
+    // Seamless board surface (warm off-white or dark, per theme).
+    drawRoundRect(
+        color = theme.boardBackground,
+        topLeft = Offset(originX, originY),
+        size = Size(side, side),
+        cornerRadius = androidx.compose.ui.geometry.CornerRadius(cell * 0.4f, cell * 0.4f)
+    )
 
-    val translationX = when (slideDirection) {
-        Direction.LEFT -> -slideOffsetPx
-        Direction.RIGHT -> slideOffsetPx
-        Direction.UP, Direction.DOWN -> shakeOffsetPx
-    } - shakeOffsetPx
+    fun centerOf(c: Pair<Int, Int>) =
+        Offset(originX + (c.second + 0.5f) * cell, originY + (c.first + 0.5f) * cell)
 
-    val translationY = when (slideDirection) {
-        Direction.UP -> -slideOffsetPx
-        Direction.DOWN -> slideOffsetPx
-        Direction.LEFT, Direction.RIGHT -> 0f
-    }
+    fun slideShift(dir: Direction, cells: Float) = Offset(
+        x = if (dir == Direction.LEFT) -cells * cell else if (dir == Direction.RIGHT) cells * cell else 0f,
+        y = if (dir == Direction.UP) -cells * cell else if (dir == Direction.DOWN) cells * cell else 0f
+    )
 
-    val alpha = (1f - slide).coerceIn(0f, 1f)
+    val stroke = (cell * 0.20f).coerceIn(4f, 16f)
+    val maxShiftCells = maze.gridSize + 4f
 
-    Box(
-        modifier = Modifier
-            .size(cellSize - 4.dp)
-            .graphicsLayer {
-                this.translationX = translationX
-                this.translationY = translationY
-            }
-            .alpha(alpha)
-    ) {
-        ArrowRenderer(
-            direction = cell.direction,
-            theme = theme,
-            modifier = Modifier.fillMaxSize()
+    maze.paths.forEach { path ->
+        // Skip cleared paths — but keep drawing one while its rope-pull slide-out
+        // animation is still running (otherwise the exit animation never shows).
+        if (path.id in clearedPathIds && path.id !in slidingOut) return@forEach
+        val slide = slidingOut[path.id]?.value ?: 0f
+        val shake = shaking[path.id]?.value ?: 0f
+        val slideOffset = slideShift(path.exitDirection, slide * maxShiftCells)
+        val shakeX = (kotlin.math.sin(shake * Math.PI * 5.0) * cell * 0.12f).toFloat()
+        val flash = if (shake > 0f) kotlin.math.abs(kotlin.math.sin(shake * Math.PI * 6.0)).toFloat() else 0f
+        val baseColor = theme.pathPalette[path.id % theme.pathPalette.size]
+        val color = androidx.compose.ui.graphics.lerp(baseColor, Color(0xFFE53935), flash)
+        val alpha = (1f - slide).coerceIn(0.05f, 1f)
+
+        val points = path.cells.map { centerOf(it) + slideOffset + Offset(shakeX, 0f) }
+
+        // Pulsing glow underlay for the hinted path.
+        if (hintPath == path.id) {
+            val pulse = 0.30f + 0.30f *
+                kotlin.math.abs(kotlin.math.sin(hintPulseProgress * Math.PI * 4.0)).toFloat()
+            drawPath(
+                path = smoothPolyline(points),
+                color = theme.arrowPalette.accent.copy(alpha = pulse * alpha),
+                style = Stroke(
+                    width = stroke * 2.4f,
+                    cap = StrokeCap.Round,
+                    join = androidx.compose.ui.graphics.StrokeJoin.Round
+                )
+            )
+        }
+
+        drawPath(
+            path = smoothPolyline(points),
+            color = color.copy(alpha = alpha),
+            style = Stroke(
+                width = stroke,
+                cap = StrokeCap.Round,
+                join = androidx.compose.ui.graphics.StrokeJoin.Round
+            )
         )
+        drawArrowHead(points.last(), path.exitDirection, color, stroke, alpha)
     }
+}
+
+/** Smooth curve through the path's cell centers (rounded maze-line look). */
+private fun smoothPolyline(points: List<Offset>): androidx.compose.ui.graphics.Path {
+    val p = androidx.compose.ui.graphics.Path()
+    if (points.isEmpty()) return p
+    p.moveTo(points.first().x, points.first().y)
+    if (points.size == 2) {
+        p.lineTo(points.last().x, points.last().y)
+        return p
+    }
+    for (i in 1 until points.size - 1) {
+        val midX = (points[i].x + points[i + 1].x) / 2f
+        val midY = (points[i].y + points[i + 1].y) / 2f
+        p.quadraticBezierTo(points[i].x, points[i].y, midX, midY)
+    }
+    p.lineTo(points.last().x, points.last().y)
+    return p
+}
+
+private fun DrawScope.drawArrowHead(tip: Offset, dir: Direction, color: Color, stroke: Float, alpha: Float) {
+    val unit = when (dir) {
+        Direction.UP -> Offset(0f, -1f)
+        Direction.DOWN -> Offset(0f, 1f)
+        Direction.LEFT -> Offset(-1f, 0f)
+        Direction.RIGHT -> Offset(1f, 0f)
+    }
+    val perp = Offset(-unit.y, unit.x)
+    val len = stroke * 2.4f
+    val half = stroke * 1.05f
+    val back = tip - unit * len
+    val tri = androidx.compose.ui.graphics.Path().apply {
+        moveTo(tip.x, tip.y)
+        lineTo(back.x + perp.x * half, back.y + perp.y * half)
+        lineTo(back.x - perp.x * half, back.y - perp.y * half)
+        close()
+    }
+    drawPath(tri, color.copy(alpha = alpha))
 }
 
 @Composable
