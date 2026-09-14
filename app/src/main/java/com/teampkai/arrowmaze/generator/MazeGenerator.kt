@@ -84,7 +84,11 @@ object MazeGenerator {
         var best: MazeResult? = null
         var bestCoverage = -1
         var currentSeed = seed
-        repeat(DENSITY_ATTEMPTS) {
+        var attempt = 0
+        // A real loop (not `repeat {}`) so `break` below is legal —
+        // break/continue are forbidden inside lambdas in Kotlin.
+        while (attempt < DENSITY_ATTEMPTS) {
+            attempt++
             val result = generateWindingMaze(gridSize, targetPaths, Random(currentSeed))
             val coverage = result.cellToPathId.size
             if (coverage > bestCoverage) {
