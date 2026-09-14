@@ -30,9 +30,9 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.ui.hapticfeedback.HapticFeedbackConstants
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -487,7 +487,7 @@ fun GamePlayScreen(
     onBack: () -> Unit,
     onResetLevel: () -> Unit = {}
 ) {
-    val view = LocalView.current
+    val haptic = LocalHapticFeedback.current
 
     // Fallback: if the maze is somehow missing (e.g. a failed generation),
     // show a friendly retry screen instead of silently composing nothing
@@ -648,7 +648,7 @@ fun GamePlayScreen(
                         when (result) {
                             is MoveResult.ArrowCleared -> {
                                 // Light haptic tick on every successful exit.
-                                view.performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
+                                haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
                                 // Start slide-out animation; keep cell rendered
                                 // until animation completes, then it disappears.
                                 val anim = Animatable(0f)
@@ -677,7 +677,8 @@ fun GamePlayScreen(
                                 // to animate is index lives-1 — not lives, which made the
                                 // wrong heart flash and the last one never animate.
                                 val lostIndex = (gameState.lives - 1).coerceIn(0, 2)
-                                view.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
+                                // Heavy buzz on blocked collision taps.
+                                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                                 val heartAnimFor = Animatable(0f)
                                 heartAnim[lostIndex] = heartAnimFor
                                 scope.launch {

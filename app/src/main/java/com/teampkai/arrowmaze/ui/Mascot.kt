@@ -77,9 +77,12 @@ private fun DrawScope.drawBunny(
     val w = size.width
     val h = size.height
     val cx = w / 2f
-    val cycle = (sin(t * 2f * PI) + 1f) / 2f // smooth 0..1
+    // Keep the whole chain Float: sin(Double) (via kotlin.math.PI) would
+    // promote every coordinate to Double and break all Offset() calls.
+    val wave = sin(t * 2f * PI.toFloat())
+    val cycle = (wave + 1f) / 2f // smooth 0..1
     val bob = if (celebrating) cycle * h * 0.10f else cycle * h * 0.035f
-    val earWiggle = sin(t * 2f * PI) * if (celebrating) 14f else 5f
+    val earWiggle = wave * if (celebrating) 14f else 5f
 
     val headR = w * 0.30f
     val headCy = h * 0.60f + bob
