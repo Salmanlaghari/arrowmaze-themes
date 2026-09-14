@@ -95,7 +95,7 @@ class MusicManager(private val context: Context) {
             for (i in 0 until noteSamples) {
                 val t = i.toDouble() / sampleRate
                 val env = envelope(i, noteSamples, bg)
-                val voice = when (timber) {
+                val voice = when (timbre) {
                     Timbre.SINE -> sin(2.0 * PI * noteHz * t)
                     Timbre.TRIANGLE -> {
                         // Triangle via folded sine
@@ -157,7 +157,7 @@ class MusicManager(private val context: Context) {
     private fun characterFor(bg: BackgroundType): Triple<Int, IntArray, Timbre> {
         return when (bg) {
             // Bright, fast, major keys — daytime / cheerful
-            BackgroundType.SKY, BackgroundType.SUNRISE, BackgroundType.BEACH,
+            BackgroundType.SKY, BackgroundType.SUNSET, BackgroundType.SUNRISE, BackgroundType.BEACH,
             BackgroundType.CANDY_LAND, BackgroundType.COTTON_CANDY, BackgroundType.RAINBOW,
             BackgroundType.PASTEL, BackgroundType.OASIS ->
                 Triple(120, intArrayOf(0, 2, 4, 5, 7, 9, 11), Timbre.SINE)

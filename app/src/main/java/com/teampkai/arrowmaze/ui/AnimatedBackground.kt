@@ -291,7 +291,9 @@ private fun DrawScope.drawScenery(
                 var x = 0f
                 val step = w / 7f
                 while (x <= w) {
-                    val peakY = horizon - (40f + (sin(x * 0.013 + type.ordinal) * 35f))
+                    // 0.013f (Float) keeps the whole expression Float — a Double here
+                    // broke lineTo's Float parameter (compile error).
+                    val peakY = horizon - (40f + (sin(x * 0.013f + type.ordinal) * 35f))
                     lineTo(x, peakY)
                     x += step / 2
                 }
