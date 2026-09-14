@@ -70,7 +70,32 @@ object ThemeRegistry {
         )
     )
 
-    val allThemes = listOf(JUNGLE, OCEAN)
+    /** Cyberpunk Neon — dark grid, glowing magenta/cyan arrows (per spec theme). */
+    val CYBERPUNK_NEON = Theme(
+        id = 3,
+        name = "Cyberpunk Neon",
+        backgroundColors = listOf(
+            Color(0xFF060218),
+            Color(0xFF120458),
+            Color(0xFF2D0A5A)
+        ),
+        arrowPalette = ArrowPalette(
+            primary = Color(0xFF00E5FF),     // electric cyan
+            secondary = Color(0xFF7C4DFF),   // deep violet
+            accent = Color(0xFFFF00FF),      // hot magenta
+            glow = Color(0x8800E5FF)         // translucent cyan glow
+        ),
+        ambientAnimation = "bubbles",
+        parallaxLayers = listOf(
+            ParallaxLayer(speed = 0.1f, drawType = "deep_sea"),
+            ParallaxLayer(speed = 0.4f, drawType = "mountains"),
+            ParallaxLayer(speed = 0.7f, drawType = "trees_near")
+        )
+    )
+
+    // NOTE: declared AFTER all theme vals — a forward reference here compiles
+    // but yields a null entry at object-initialization time.
+    val allThemes = listOf(JUNGLE, OCEAN, CYBERPUNK_NEON)
 
     /**
      * Named theme palette seeds. Each entry gives a base hue and a theme name.
@@ -105,11 +130,12 @@ object ThemeRegistry {
      * procedural palette seeds so every level feels visually distinct.
      */
     fun themeForLevel(level: Int): Theme {
-        if (level == 1) return JUNGLE
-        if (level == 2) return OCEAN
-        val seedIndex = ((level - 3) % paletteSeeds.size + paletteSeeds.size) % paletteSeeds.size
+        if (level == 1) return CYBERPUNK_NEON
+        if (level == 2) return JUNGLE
+        if (level == 3) return OCEAN
+        val seedIndex = ((level - 4) % paletteSeeds.size + paletteSeeds.size) % paletteSeeds.size
         val seed = paletteSeeds[seedIndex]
-        val tier = (level - 1) / paletteSeeds.size  // 0,1,2,... shifts hue slightly
+        val tier = (level - 4) / paletteSeeds.size  // 0,1,2,... shifts hue slightly
         val hue = (seed.baseHue + tier * 7f) % 360f
         val primary = hslToColor(hue, seed.saturation, seed.lightness)
         val secondary = hslToColor((hue + 200f) % 360f, seed.saturation * 0.7f, seed.lightness * 0.5f)
