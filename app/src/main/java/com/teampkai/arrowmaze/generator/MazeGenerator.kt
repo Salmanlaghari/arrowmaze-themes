@@ -67,23 +67,38 @@ data class MazeResult(
 
 object MazeGenerator {
 
-    /** Minimum number of paths a valid board must contain. */
-    private const val MIN_PATHS = 4
+    /** How many seeds to try when hunting for a dense board. */
+    private const val DENSITY_ATTEMPTS = 7
+
+    /** Minimum acceptable fraction of grid cells covered by path bodies. */
+    private const val MIN_COVERAGE = 0.75f
 
     fun generate(level: Int, seed: Long = System.currentTimeMillis()): MazeResult {
         val gridSize = calculateGridSize(level)
         val targetPaths = calculatePathCount(level, gridSize)
+        val totalCells = gridSize * gridSize
 
-        // Retry a few seeds if an attempt comes out too sparse; the placement
-        // loop is bounded so this can never hang.
+        // Density-first: the greedy placement can stall early on an unlucky
+        // seed, so generate several boards and keep the DENSEST one. Spec
+        // requires the grid to be packed 80–90% full with interlocking paths.
+        var best: MazeResult? = null
+        var bestCoverage = -1
         var currentSeed = seed
-        repeat(6) {
-            val rng = Random(currentSeed)
-            val result = generateWindingMaze(gridSize, targetPaths, rng)
-            if (result.paths.size >= MIN_PATHS) return result
+        var attempt = 0
+        // A real loop (not `repeat {}`) so `break` below is legal —
+        // break/continue are forbidden inside lambdas in Kotlin.
+        while (attempt < DENSITY_ATTEMPTS) {
+            attempt++
+            val result = generateWindingMaze(gridSize, targetPaths, Random(currentSeed))
+            val coverage = result.cellToPathId.size
+            if (coverage > bestCoverage) {
+                bestCoverage = coverage
+                best = result
+            }
+            if (bestCoverage >= totalCells * MIN_COVERAGE) break
             currentSeed = currentSeed * 6364136223846793005L + 1442695040888963407L
         }
-        return generateWindingMaze(gridSize, targetPaths, Random(currentSeed))
+        return best ?: generateWindingMaze(gridSize, targetPaths, Random(seed))
     }
 
     /**
@@ -99,11 +114,16 @@ object MazeGenerator {
         return g.coerceIn(8, 34)
     }
 
-    /** Target number of winding paths so the board reads dense but fair. */
+    /**
+     * Target number of winding paths, calibrated for 80–90% cell coverage:
+     * bodies average ~4 cells and every path also needs headroom for its
+     * exit corridor, so ~17–20% of cells worth of paths packs the tightest.
+     */
     fun calculatePathCount(level: Int, gridSize: Int): Int {
-        val base = (gridSize * gridSize) / 8 + level / 16
-        val maxDensity = ((gridSize * gridSize) * 0.5f / 3.5f).toInt()
-        return base.coerceIn(6, maxDensity.coerceAtLeast(6))
+        val cells = gridSize * gridSize
+        val base = (cells * 0.18f).toInt() + level / 32
+        val maxDensity = (cells * 0.28f).toInt()
+        return base.coerceIn(8, maxDensity.coerceAtLeast(8))
     }
 
     /**
@@ -134,9 +154,12 @@ object MazeGenerator {
         val generationOrder = mutableListOf<Pair<Int, Int>>()
         val allDirs = Direction.entries
 
-        val maxBody = 4 + gridSize / 3
+        val maxBody = 4 + gridSize / 2
         var attempts = 0
-        val maxAttempts = targetPaths * 90
+        val maxAttempts = targetPaths * 130
+
+        /** Smallest body a normal placement accepts. */
+        val minBody = 2
 
         while (paths.size < targetPaths && attempts < maxAttempts) {
             attempts++
@@ -151,6 +174,7 @@ object MazeGenerator {
             // ── 2. Wind the body backward from the head ──────────────────
             val body = buildWindingBody(head, dir, corridor, occupied, gridSize, maxBody, rng)
                 ?: continue
+            if (body.size < minBody) continue
 
             // ── 3. Commit the path ───────────────────────────────────────
             val path = ArrowPath(
@@ -165,6 +189,39 @@ object MazeGenerator {
             }
             paths.add(path)
             generationOrder.add(head)
+        }
+
+        // Density fallback: greedy placement stalls when no multi-cell body
+        // fits, but the spec requires a tightly packed board — so sweep every
+        // free cell and squeeze in a short path wherever a corridor is clear.
+        if (paths.size < targetPaths) {
+            for (row in 0 until gridSize) {
+                if (paths.size >= targetPaths) break
+                for (col in 0 until gridSize) {
+                    if (paths.size >= targetPaths) break
+                    val head = Pair(row, col)
+                    if (head in occupied) continue
+                    for (dir in allDirs) {
+                        val corridor = corridorOf(head, dir, gridSize)
+                        if (corridor.any { it in occupied }) continue
+                        val body = buildWindingBody(head, dir, corridor, occupied, gridSize, 2, rng)
+                            ?: continue
+                        val path = ArrowPath(
+                            id = paths.size,
+                            cells = body.asReversed(),
+                            exitDirection = dir,
+                            corridorCells = corridor
+                        )
+                        for (cell in body) {
+                            occupied.add(cell)
+                            cellToPath[cell] = path.id
+                        }
+                        paths.add(path)
+                        generationOrder.add(head)
+                        break
+                    }
+                }
+            }
         }
 
         // Legacy grid view: every path cell "has an arrow"; direction points

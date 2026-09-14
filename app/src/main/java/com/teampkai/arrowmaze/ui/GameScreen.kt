@@ -925,7 +925,7 @@ private fun DrawScope.drawMazeBoard(
             val pulse = 0.30f + 0.30f *
                 kotlin.math.abs(kotlin.math.sin(hintPulseProgress * Math.PI * 4.0)).toFloat()
             drawPath(
-                path = smoothPolyline(points),
+                path = orthogonalPath(points),
                 color = theme.arrowPalette.accent.copy(alpha = pulse * alpha),
                 style = Stroke(
                     width = stroke * 2.4f,
@@ -936,33 +936,29 @@ private fun DrawScope.drawMazeBoard(
         }
 
         drawPath(
-            path = smoothPolyline(points),
+            path = orthogonalPath(points),
             color = color.copy(alpha = alpha),
             style = Stroke(
                 width = stroke,
-                cap = StrokeCap.Round,
-                join = androidx.compose.ui.graphics.StrokeJoin.Round
+                cap = StrokeCap.Butt,
+                join = androidx.compose.ui.graphics.StrokeJoin.Miter
             )
         )
         drawArrowHead(points.last(), path.exitDirection, color, stroke, alpha)
     }
 }
 
-/** Smooth curve through the path's cell centers (rounded maze-line look). */
-private fun smoothPolyline(points: List<Offset>): androidx.compose.ui.graphics.Path {
+/**
+ * Strict 90° orthogonal polyline through the path's cell centers — connected
+ * horizontal/vertical segments only, zero freehand curves (per spec).
+ */
+private fun orthogonalPath(points: List<Offset>): androidx.compose.ui.graphics.Path {
     val p = androidx.compose.ui.graphics.Path()
     if (points.isEmpty()) return p
     p.moveTo(points.first().x, points.first().y)
-    if (points.size == 2) {
-        p.lineTo(points.last().x, points.last().y)
-        return p
+    for (i in 1 until points.size) {
+        p.lineTo(points[i].x, points[i].y)
     }
-    for (i in 1 until points.size - 1) {
-        val midX = (points[i].x + points[i + 1].x) / 2f
-        val midY = (points[i].y + points[i + 1].y) / 2f
-        p.quadraticBezierTo(points[i].x, points[i].y, midX, midY)
-    }
-    p.lineTo(points.last().x, points.last().y)
     return p
 }
 
