@@ -30,7 +30,9 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.hapticfeedback.HapticFeedbackConstants
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -146,15 +148,6 @@ fun GameApp() {
         musicManager.musicEnabled = savedProgress.soundEnabled
     }
 
-    // Start per-level music whenever the current level or screen changes.
-    LaunchedEffect(currentScreen, gameState.currentLevel) {
-        if (currentScreen == Screen.GAME) {
-            musicManager.startForLevel(gameState.currentLevel)
-        } else {
-            musicManager.stop()
-        }
-    }
-
     val coroutineScope = rememberCoroutineScope()
 
     val engine = remember {
@@ -169,6 +162,19 @@ fun GameApp() {
     }
     var gameState by remember { mutableStateOf(engine.state) }
     var currentScreen by remember { mutableStateOf(Screen.LEVEL_SELECT) }
+
+    // Start per-level music whenever the current level or screen changes.
+    // NOTE: this must be declared AFTER gameState/currentScreen above — the
+    // previous placement referenced them before declaration, which broke the
+    // build (and with it, level navigation) on the latest release.
+    LaunchedEffect(currentScreen, gameState.currentLevel) {
+        if (currentScreen == Screen.GAME) {
+            musicManager.startForLevel(gameState.currentLevel)
+        } else {
+            musicManager.stop()
+        }
+    }
+
     // Each level gets its own procedural theme (see ThemeRegistry.themeForLevel)
     // so the 1500+ levels all feel visually distinct.
     val theme = ThemeRegistry.themeForLevel(gameState.currentLevel)
@@ -240,7 +246,8 @@ fun GameApp() {
                 onBack = {
                     soundManager.playButtonTap()
                     currentScreen = Screen.LEVEL_SELECT
-                }
+                },
+                onResetLevel = { gameState = engine.retryLevel() }
             )
         }
         Screen.LEVEL_COMPLETE -> {
@@ -477,9 +484,53 @@ fun GamePlayScreen(
     onToggleSound: () -> Unit,
     onEngineStateChanged: () -> Unit,
     onMoveResult: (MoveResult) -> Unit,
-    onBack: () -> Unit
+    onBack: () -> Unit,
+    onResetLevel: () -> Unit = {}
 ) {
-    val maze = gameState.maze ?: return
+    val view = LocalView.current
+
+    // Fallback: if the maze is somehow missing (e.g. a failed generation),
+    // show a friendly retry screen instead of silently composing nothing
+    // (the old `?: return` produced a blank white screen with no way out).
+    val maze = gameState.maze
+    if (maze == null) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(Brush.verticalGradient(theme.backgroundColors)),
+            contentAlignment = Alignment.Center
+        ) {
+            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                BunnyMascot(
+                    size = 88.dp,
+                    accentColor = theme.arrowPalette.accent,
+                    modifier = Modifier.padding(bottom = 16.dp)
+                )
+                Text(
+                    text = "Maze failed to load",
+                    color = Color.White,
+                    fontSize = 18.sp,
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier.padding(bottom = 12.dp)
+                )
+                Button(
+                    onClick = onResetLevel,
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = theme.arrowPalette.accent
+                    )
+                ) {
+                    Text(
+                        text = "Retry",
+                        color = Color(0xFF1B5E20),
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+            }
+        }
+        return
+    }
+
+    val headerColor = theme.arrowPalette.secondary.copy(alpha = 0.92f)
 
     // Cells currently animating their slide-out. Once the animation finishes
     // they're removed from the set; the engine has already removed them from
@@ -511,11 +562,11 @@ fun GamePlayScreen(
             modifier = Modifier
                 .fillMaxSize()
         ) {
-            // Top header bar — blue background, back button, "Level N" pill, settings button.
+            // Top header bar — themed background, back button, mascot + "Level N" pill, settings.
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .background(Color(0xFF2196F3))
+                    .background(headerColor)
             ) {
                 Row(
                     modifier = Modifier
@@ -529,15 +580,24 @@ fun GamePlayScreen(
                     Spacer(modifier = Modifier.weight(1f))
                     Box(
                         modifier = Modifier
-                            .background(Color(0xFF42A5F5), RoundedCornerShape(50))
-                            .padding(horizontal = 24.dp, vertical = 8.dp)
+                            .background(theme.arrowPalette.primary.copy(alpha = 0.35f), RoundedCornerShape(50))
+                            .padding(horizontal = 20.dp, vertical = 6.dp)
                     ) {
-                        Text(
-                            text = "Level ${gameState.currentLevel}",
-                            color = Color.White,
-                            fontSize = 18.sp,
-                            fontWeight = FontWeight.Bold
-                        )
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            BunnyMascot(
+                                size = 26.dp,
+                                furColor = Color.White,
+                                outlineColor = headerColor,
+                                accentColor = theme.arrowPalette.accent
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                text = "Level ${gameState.currentLevel}",
+                                color = Color.White,
+                                fontSize = 18.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
                     }
                     Spacer(modifier = Modifier.weight(1f))
                     IconButton(onClick = onToggleSound) {
@@ -587,6 +647,8 @@ fun GamePlayScreen(
                         val result = engine.tapArrow(row, col)
                         when (result) {
                             is MoveResult.ArrowCleared -> {
+                                // Light haptic tick on every successful exit.
+                                view.performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
                                 // Start slide-out animation; keep cell rendered
                                 // until animation completes, then it disappears.
                                 val anim = Animatable(0f)
@@ -610,8 +672,12 @@ fun GamePlayScreen(
                                     )
                                     shaking.remove(Pair(row, col))
                                 }
-                                // Pop/fade the just-lost heart (lives already decremented).
-                                val lostIndex = gameState.lives
+                                // Pop/fade the just-lost heart. The engine has already
+                                // decremented lives (3->2 on the first miss), so the heart
+                                // to animate is index lives-1 — not lives, which made the
+                                // wrong heart flash and the last one never animate.
+                                val lostIndex = (gameState.lives - 1).coerceIn(0, 2)
+                                view.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
                                 val heartAnimFor = Animatable(0f)
                                 heartAnim[lostIndex] = heartAnimFor
                                 scope.launch {
@@ -641,7 +707,7 @@ fun GamePlayScreen(
                 )
             }
 
-            // Bottom footer — blue background with diagonal top edge, "Arrows Escape" title.
+            // Bottom footer — themed background with diagonal top edge, "Arrows Escape" title.
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -658,7 +724,7 @@ fun GamePlayScreen(
                         lineTo(0f, h)
                         close()
                     }
-                    drawPath(path, Color(0xFF2196F3))
+                    drawPath(path, headerColor)
                 }
                 Column(
                     modifier = Modifier
@@ -669,14 +735,21 @@ fun GamePlayScreen(
                 ) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Text("→", color = Color.White, fontSize = 22.sp, fontWeight = FontWeight.Bold)
-                        Spacer(modifier = Modifier.width(8.dp))
+                        Spacer(modifier = Modifier.width(10.dp))
+                        BunnyMascot(
+                            size = 36.dp,
+                            furColor = Color.White,
+                            outlineColor = headerColor,
+                            accentColor = theme.arrowPalette.accent
+                        )
+                        Spacer(modifier = Modifier.width(10.dp))
                         Text(
                             text = "Arrows Escape",
                             color = Color.White,
                             fontSize = 24.sp,
                             fontWeight = FontWeight.Bold
                         )
-                        Spacer(modifier = Modifier.width(8.dp))
+                        Spacer(modifier = Modifier.width(10.dp))
                         Text("←", color = Color.White, fontSize = 22.sp, fontWeight = FontWeight.Bold)
                     }
                     Spacer(modifier = Modifier.height(4.dp))
@@ -875,9 +948,11 @@ fun LevelCompleteScreen(
                 horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.Center
             ) {
-                Text(
-                    text = "🎉",
-                    fontSize = 64.sp,
+                // Celebrating bunny replaces the static emoji.
+                BunnyMascot(
+                    size = 96.dp,
+                    celebrating = true,
+                    accentColor = theme.arrowPalette.accent,
                     modifier = Modifier.padding(bottom = 16.dp)
                 )
 

@@ -158,6 +158,14 @@ object MazeGenerator {
                 if (path.all { it in remaining }) {
                     direction[cell] = dir
                     generationOrder.add(cell)
+                    // CRITICAL (solvability): remove the arrow's own cell too.
+                    // If it stayed in the pool, a LATER arrow's path could cross
+                    // this cell; the later arrow would then be blocked by this
+                    // one and vice versa — a deadlock where neither can ever
+                    // clear, and hints would report "no moves". Removing the
+                    // cell keeps every placed arrow off every later path, so
+                    // the reverse of generationOrder is always a valid solve.
+                    remaining.remove(cell)
                     remaining.removeAll(path.toSet())
                     placed = true
                     break
